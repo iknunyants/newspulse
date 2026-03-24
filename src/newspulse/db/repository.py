@@ -162,3 +162,20 @@ class Repository:
             (article_id, topic_id),
         )
         await self._conn.commit()
+
+    # --- Scrape log ---
+
+    async def get_last_scrape_time(self, source: str) -> str | None:
+        async with self._conn.execute(
+            "SELECT last_scraped_at FROM scrape_log WHERE source = ?", (source,)
+        ) as cur:
+            row = await cur.fetchone()
+        return row["last_scraped_at"] if row else None
+
+    async def update_scrape_time(self, source: str) -> None:
+        await self._conn.execute(
+            "INSERT INTO scrape_log (source, last_scraped_at) VALUES (?, datetime('now'))"
+            " ON CONFLICT(source) DO UPDATE SET last_scraped_at = datetime('now')",
+            (source,),
+        )
+        await self._conn.commit()

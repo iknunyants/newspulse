@@ -58,13 +58,24 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
             return_exceptions=True,
         )
 
-    # 2. Store new articles
+    # 2. Store new articles; skip notification for sources being scraped for the first time
     new_articles: list[Article] = []
     for scraper, result in zip(scrapers, results):
         if isinstance(result, Exception):
             logger.error("Scraper %s raised: %s", scraper.__class__.__name__, result)
             continue
         scraped = result
+        if not scraped:
+            continue
+
+        # Determine sources present in this batch (usually one per scraper)
+        sources_in_batch: set[str] = {sa.source for sa in scraped}
+        first_scrape_sources: set[str] = set()
+        for source in sources_in_batch:
+            if await repo.get_last_scrape_time(source) is None:
+                first_scrape_sources.add(source)
+                logger.info("Source %r: first scrape — storing baseline, skipping notifications.", source)
+
         for sa in scraped:
             try:
                 article, is_new = await repo.upsert_article(
@@ -74,10 +85,13 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
                     summary=sa.summary,
                     published_at=sa.published_at,
                 )
-                if is_new:
+                if is_new and sa.source not in first_scrape_sources:
                     new_articles.append(article)
             except Exception as e:
                 logger.error("Failed to store article %r: %s", sa.url, e)
+
+        for source in sources_in_batch:
+            await repo.update_scrape_time(source)
 
     logger.info("Scraped %d new articles.", len(new_articles))
     if not new_articles:

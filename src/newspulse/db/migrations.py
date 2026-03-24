@@ -42,6 +42,13 @@ CREATE TABLE IF NOT EXISTS sent_articles (
 )
 """
 
+CREATE_SCRAPE_LOG = """
+CREATE TABLE IF NOT EXISTS scrape_log (
+    source         TEXT PRIMARY KEY,
+    last_scraped_at TEXT NOT NULL
+)
+"""
+
 
 async def init_db(conn: aiosqlite.Connection) -> None:
     await conn.execute("PRAGMA journal_mode=WAL")
@@ -50,4 +57,5 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     await conn.execute(CREATE_TOPICS)
     await conn.execute(CREATE_ARTICLES)
     await conn.execute(CREATE_SENT_ARTICLES)
+    await conn.execute(CREATE_SCRAPE_LOG)
     await conn.commit()
