@@ -38,6 +38,9 @@ select = ["E", "F", "I"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "live: marks tests that hit live external URLs (deselect with -m 'not live')",
+]
 
 [dependency-groups]
 dev = [
