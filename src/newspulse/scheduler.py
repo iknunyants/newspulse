@@ -10,6 +10,7 @@ from telegram.error import Forbidden, TelegramError
 
 from newspulse.db.models import Article, Topic
 from newspulse.db.repository import Repository
+from newspulse.formatting import format_notification
 from newspulse.matching.keywords import article_matches_keywords
 from newspulse.matching.relevance import batch_check_relevance
 from newspulse.scrapers.web import get_all_scrapers
@@ -19,11 +20,12 @@ logger = logging.getLogger(__name__)
 
 async def _send_notification(bot: Bot, telegram_id: int, topic: Topic, article: Article) -> bool:
     """Send a single article notification. Returns False if user blocked the bot."""
-    text = (
-        f"*{_escape_md(article.title)}*\n\n"
-        f"{_escape_md(article.summary[:300]) + '...' if article.summary else ''}"
-        f"\n\n[Read more]({article.url})"
-        f"\n\n_Topic: {_escape_md(topic.topic_text)}_"
+    text = format_notification(
+        title=article.title,
+        content=article.content or article.summary,
+        source=article.source,
+        url=article.url,
+        topic_text=topic.topic_text,
     )
     try:
         await bot.send_message(
@@ -39,12 +41,6 @@ async def _send_notification(bot: Bot, telegram_id: int, topic: Topic, article: 
     except TelegramError as e:
         logger.error("Failed to send message to %d: %s", telegram_id, e)
         return True  # Don't deactivate topics on generic errors
-
-
-def _escape_md(text: str) -> str:
-    """Escape special characters for MarkdownV2."""
-    special = r"\_*[]()~`>#+-=|{}.!"
-    return "".join(f"\\{c}" if c in special else c for c in text)
 
 
 async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
@@ -84,6 +80,7 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
                     url=sa.url,
                     summary=sa.summary,
                     published_at=sa.published_at,
+                    content=sa.content,
                 )
                 if is_new and sa.source not in first_scrape_sources:
                     new_articles.append(article)

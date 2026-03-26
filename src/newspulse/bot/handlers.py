@@ -5,6 +5,7 @@ from telegram.ext import ContextTypes
 
 from newspulse.config import settings
 from newspulse.db.repository import Repository
+from newspulse.formatting import escape_md as _esc
 from newspulse.matching.keywords import generate_keywords
 
 logger = logging.getLogger(__name__)
@@ -58,15 +59,13 @@ async def add_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    await update.message.reply_text("⏳ Generating keywords for your topic…")
+    await update.message.reply_text("⏳ Adding your topic…")
 
     keywords = await generate_keywords(topic_text)
     topic = await repo.add_topic(user.id, topic_text, keywords)
 
-    kw_list = "\\, ".join(_esc(k) for k in keywords[:15])
     await update.message.reply_text(
-        f"✅ Topic added: *{_esc(topic.topic_text)}*\n\n"
-        f"_Monitoring keywords:_ {kw_list}",
+        f"✅ Topic added: *{_esc(topic.topic_text)}*",
         parse_mode="MarkdownV2",
     )
 
@@ -131,7 +130,3 @@ async def remove_topic_callback(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
 
-def _esc(text: str) -> str:
-    """Escape MarkdownV2 special characters."""
-    special = r"\_*[]()~`>#+-=|{}.!"
-    return "".join(f"\\{c}" if c in special else c for c in text)
