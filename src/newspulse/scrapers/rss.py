@@ -13,6 +13,8 @@ RSS_FEEDS = [
     ("Reuters", "https://feeds.reuters.com/reuters/topNews"),
     ("CivilNet", "https://www.civilnet.am/feed/"),
     ("1Lurer", "https://www.1lurer.am/en/rss"),
+    ("NEWS.am", "https://news.am/arm/rss/"),
+    ("Azatutyun", "https://www.azatutyun.am/api/"),
 ]
 
 
@@ -50,6 +52,7 @@ class RssScraper(BaseScraper):
                             url=url,
                             summary=summary[:500],
                             published_at=published_at,
+                            content=summary,
                         )
                     )
             except Exception as e:

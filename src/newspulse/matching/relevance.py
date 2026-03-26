@@ -37,7 +37,7 @@ async def batch_check_relevance(topic_text: str, articles: list[Article]) -> lis
 
 async def _check_batch(topic_text: str, articles: list[Article]) -> list[Article]:
     numbered = "\n".join(
-        f'{idx + 1}. Title: "{a.title}" | Summary: "{a.summary[:200]}"'
+        f'{idx + 1}. Title: "{a.title}" | Content: "{(a.content or a.summary)[:500]}"'
         for idx, a in enumerate(articles)
     )
     prompt = (

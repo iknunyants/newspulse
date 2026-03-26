@@ -58,4 +58,9 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     await conn.execute(CREATE_ARTICLES)
     await conn.execute(CREATE_SENT_ARTICLES)
     await conn.execute(CREATE_SCRAPE_LOG)
+    # Migrations for existing databases
+    try:
+        await conn.execute("ALTER TABLE articles ADD COLUMN content TEXT NOT NULL DEFAULT ''")
+    except Exception:
+        pass  # Column already exists
     await conn.commit()

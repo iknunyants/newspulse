@@ -28,3 +28,4 @@ class Article:
     summary: str
     published_at: str | None
     created_at: str
+    content: str = ""

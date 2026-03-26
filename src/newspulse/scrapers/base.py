@@ -22,6 +22,7 @@ class ScrapedArticle:
     url: str
     summary: str
     published_at: str | None
+    content: str = ""
 
 
 class BaseScraper(ABC):

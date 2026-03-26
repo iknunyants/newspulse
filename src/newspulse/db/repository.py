@@ -124,10 +124,11 @@ class Repository:
         url: str,
         summary: str,
         published_at: str | None,
+        content: str = "",
     ) -> tuple[Article, bool]:
         url_hash = self._url_hash(url)
         async with self._conn.execute(
-            "SELECT id, url_hash, source, title, url, summary, published_at, created_at "
+            "SELECT id, url_hash, source, title, url, summary, published_at, created_at, content "
             "FROM articles WHERE url_hash = ?",
             (url_hash,),
         ) as cur:
@@ -136,13 +137,13 @@ class Repository:
             return Article(**existing), False
 
         await self._conn.execute(
-            "INSERT INTO articles (url_hash, source, title, url, summary, published_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (url_hash, source, title, url, summary[:500], published_at),
+            "INSERT INTO articles (url_hash, source, title, url, summary, published_at, content) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (url_hash, source, title, url, summary[:500], published_at, content[:5000]),
         )
         await self._conn.commit()
         async with self._conn.execute(
-            "SELECT id, url_hash, source, title, url, summary, published_at, created_at "
+            "SELECT id, url_hash, source, title, url, summary, published_at, created_at, content "
             "FROM articles WHERE url_hash = ?",
             (url_hash,),
         ) as cur:
