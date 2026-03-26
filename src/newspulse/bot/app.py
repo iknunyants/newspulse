@@ -1,4 +1,12 @@
-from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler
+import logging
+
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+)
 
 from newspulse.bot.handlers import (
     add_topic,
@@ -11,6 +19,12 @@ from newspulse.bot.handlers import (
 from newspulse.config import Settings
 from newspulse.db.repository import Repository
 
+logger = logging.getLogger(__name__)
+
+
+async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("Unhandled exception in bot handler", exc_info=context.error)
+
 
 def create_app(settings: Settings, repo: Repository) -> Application:
     app = ApplicationBuilder().token(settings.telegram_bot_token).build()
@@ -22,5 +36,6 @@ def create_app(settings: Settings, repo: Repository) -> Application:
     app.add_handler(CommandHandler("list_topics", list_topics))
     app.add_handler(CommandHandler("remove_topic", remove_topic))
     app.add_handler(CallbackQueryHandler(remove_topic_callback, pattern=r"^remove:"))
+    app.add_error_handler(_error_handler)
 
     return app

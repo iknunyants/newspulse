@@ -1,21 +1,12 @@
 import json
 import logging
 
-from google import genai
 from google.genai import types
 
 from newspulse.config import settings
+from newspulse.gemini_client import get_client
 
 logger = logging.getLogger(__name__)
-
-_client: genai.Client | None = None
-
-
-def _get_client() -> genai.Client:
-    global _client
-    if _client is None:
-        _client = genai.Client(api_key=settings.gemini_api_key)
-    return _client
 
 
 async def generate_keywords(topic_text: str) -> list[str]:
@@ -32,7 +23,7 @@ async def generate_keywords(topic_text: str) -> list[str]:
         "Be inclusive — it is better to cast a wide net.\n"
         "Return ONLY a valid JSON array of strings, no explanation."
     )
-    client = _get_client()
+    client = get_client()
     try:
         response = await client.aio.models.generate_content(
             model=settings.gemini_model_keywords,

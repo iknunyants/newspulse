@@ -48,7 +48,8 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
 
     # 1. Scrape all sources concurrently
     scrapers = get_all_scrapers()
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+    transport = httpx.AsyncHTTPTransport(retries=2)
+    async with httpx.AsyncClient(transport=transport, follow_redirects=True, timeout=30) as client:
         results = await asyncio.gather(
             *[s.scrape(client) for s in scrapers],
             return_exceptions=True,
