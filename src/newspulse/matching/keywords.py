@@ -22,16 +22,20 @@ async def generate_keywords(topic_text: str) -> list[str]:
     """Use Gemini to generate search keywords for a topic."""
     prompt = (
         f'Given the news monitoring topic: "{topic_text}"\n\n'
-        "Generate a JSON array of 10-20 keywords and short phrases that would appear "
+        "Generate a JSON array of 20-30 keywords and short phrases that would appear "
         "in relevant news articles. Include variations, abbreviations, related terms, "
-        "and names of key people/places/organizations related to this topic. "
+        "and names of key people/places/organizations related to this topic.\n\n"
+        "IMPORTANT: Generate keywords in BOTH English AND Armenian (Հայերեն). "
+        "Roughly half should be English and half Armenian. "
+        "For proper nouns (people, places, organizations), include both the English "
+        "spelling and the Armenian script version.\n\n"
         "Be inclusive — it is better to cast a wide net.\n"
         "Return ONLY a valid JSON array of strings, no explanation."
     )
     client = _get_client()
     try:
         response = await client.aio.models.generate_content(
-            model=settings.gemini_model,
+            model=settings.gemini_model_keywords,
             contents=prompt,
             config=types.GenerateContentConfig(temperature=0.3),
         )

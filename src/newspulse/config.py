@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     max_topics_per_user: int = 10
     gemini_model: str = "gemini-3.1-flash-lite-preview"
+    gemini_model_keywords: str = "gemini-3-flash-preview"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
