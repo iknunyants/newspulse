@@ -19,8 +19,8 @@ def reset_fetch_semaphore():
     With per-function event loops (pytest-asyncio default) it must be reset so
     each test gets a semaphore bound to its own loop.
     """
-    import newspulse.scrapers.web as web_mod
-    web_mod._FETCH_SEMAPHORE = asyncio.Semaphore(5)
+    import newspulse.scrapers.base as base_mod
+    base_mod._FETCH_SEMAPHORE = asyncio.Semaphore(5)
 
 
 @pytest.fixture

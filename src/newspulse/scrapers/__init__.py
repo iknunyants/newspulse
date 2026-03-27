@@ -2,18 +2,17 @@
 SOURCE_LANGUAGES: dict[str, str] = {
     "BBC World": "en",
     "Al Jazeera": "en",
-    "Reuters": "en",
-    "CivilNet": "en",
-    "1Lurer": "en",
+    "CivilNet": "hy",
+    "1Lurer": "hy",
     "NEWS.am": "hy",
     "Azatutyun": "hy",
-    "Hetq": "en",
-    "Mediamax": "en",
+    "Hetq": "hy",
+    "Mediamax": "hy",
     "Arka.am": "hy",
+    "APA": "en",
 }
 
 SUPPORTED_LANGUAGES: dict[str, str] = {
     "en": "English",
     "hy": "Հայերեն",
-    "ru": "Русский",
 }

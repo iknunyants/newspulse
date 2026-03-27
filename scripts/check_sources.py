@@ -22,8 +22,7 @@ sys.path.insert(0, "src")
 from newspulse.formatting import format_notification
 from newspulse.scrapers.base import ScrapedArticle
 from newspulse.scrapers.rss import RSS_FEEDS, RssScraper
-from newspulse.scrapers.web import ArkaScraper, HetqScraper, MediamaxScraper, _FETCH_SEMAPHORE  # noqa: F401
-
+from newspulse.scrapers.web import _FETCH_SEMAPHORE, ArkaScraper  # noqa: F401
 
 # ANSI colours
 _BOLD = "\033[1m"
@@ -107,15 +106,13 @@ async def run(n_samples: int, filter_source: str | None) -> None:
     scrapers: list[tuple[str, object]] = []
     for name, url in RSS_FEEDS:
         scrapers.append((name, RssScraper(feeds=[(name, url)])))
-    scrapers.append(("Hetq", HetqScraper()))
-    scrapers.append(("Mediamax", MediamaxScraper()))
     scrapers.append(("Arka.am", ArkaScraper()))
 
     if filter_source:
         scrapers = [(n, s) for n, s in scrapers if filter_source.lower() in n.lower()]
         if not scrapers:
             print(f"{_RED}No scraper matches --source {filter_source!r}{_RESET}")
-            print(f"Available: {', '.join(n for n, _ in [*[(n, None) for n, _ in RSS_FEEDS], ('Hetq', None), ('Mediamax', None), ('Arka.am', None)])}")
+            print(f"Available: {', '.join(n for n, _ in [*[(n, None) for n, _ in RSS_FEEDS], ('Arka.am', None)])}")
             return
 
     results: dict[str, list[ScrapedArticle] | str] = {}

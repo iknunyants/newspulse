@@ -15,8 +15,7 @@ import pytest
 from newspulse.formatting import format_notification
 from newspulse.scrapers.base import ScrapedArticle
 from newspulse.scrapers.rss import RSS_FEEDS, RssScraper
-from newspulse.scrapers.web import ArkaScraper, HetqScraper, MediamaxScraper
-
+from newspulse.scrapers.web import ArkaScraper
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -89,9 +88,10 @@ async def test_rss_feed_summaries_not_empty(http_client: httpx.AsyncClient, name
     if not articles:
         pytest.skip(f"{name} returned no articles")
 
-    # NEWS.am RSS provides no descriptions by design — title-only matching is expected
-    if name == "NEWS.am":
-        pytest.skip("NEWS.am RSS has no descriptions by design")
+    # These feeds provide titles only in the RSS; content is fetched from article pages.
+    # Skip the summary check here since it depends on live page fetching.
+    if name in ("NEWS.am", "1Lurer", "APA"):
+        pytest.skip(f"{name} RSS has no descriptions — content fetched from article pages")
 
     empty_summaries = [a.url for a in articles if not a.summary]
     assert not empty_summaries, \
@@ -103,49 +103,15 @@ async def test_rss_feed_summaries_not_empty(http_client: httpx.AsyncClient, name
 # ---------------------------------------------------------------------------
 
 @pytest.mark.live
-async def test_hetq_scraper(http_client: httpx.AsyncClient):
-    """HetqScraper must return articles with titles, URLs, and content."""
-    scraper = HetqScraper()
+async def test_hetq_rss(http_client: httpx.AsyncClient):
+    """Hetq Armenian RSS feed must return articles with titles and URLs."""
+    scraper = RssScraper(feeds=[("Hetq", "https://hetq.am/hy/rss")])
     articles = await scraper.scrape(http_client)
 
-    assert len(articles) > 0, "HetqScraper returned no articles — site structure may have changed"
+    assert len(articles) > 0, "Hetq RSS returned no articles — feed may be unavailable"
 
     for article in articles:
         validate_article(article, expected_source="Hetq")
-
-    # Hetq fetches full article content — at least some should have non-empty content
-    articles_with_content = [a for a in articles if a.content]
-    assert articles_with_content, "HetqScraper: no articles have non-empty content"
-
-
-@pytest.mark.live
-async def test_hetq_scraper_published_dates(http_client: httpx.AsyncClient):
-    """Hetq articles should expose publication dates via <time datetime=...>."""
-    scraper = HetqScraper()
-    articles = await scraper.scrape(http_client)
-
-    if not articles:
-        pytest.skip("HetqScraper returned no articles")
-
-    articles_with_date = [a for a in articles if a.published_at]
-    assert articles_with_date, \
-        "HetqScraper: no articles have published_at — <time datetime> selector may be broken"
-
-
-@pytest.mark.live
-async def test_mediamax_scraper(http_client: httpx.AsyncClient):
-    """MediamaxScraper must return articles with titles and URLs."""
-    scraper = MediamaxScraper()
-    articles = await scraper.scrape(http_client)
-
-    assert len(articles) > 0, "MediamaxScraper returned no articles — site structure may have changed"
-
-    for article in articles:
-        validate_article(article, expected_source="Mediamax")
-
-    # Mediamax fetches full article content — at least some should have non-empty content
-    articles_with_content = [a for a in articles if a.content]
-    assert articles_with_content, "MediamaxScraper: no articles have non-empty content"
 
 
 @pytest.mark.live

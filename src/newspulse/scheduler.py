@@ -15,6 +15,7 @@ from newspulse.matching.keywords import article_matches_keywords
 from newspulse.matching.relevance import batch_check_relevance
 from newspulse.scrapers import SOURCE_LANGUAGES
 from newspulse.scrapers.web import get_all_scrapers
+from newspulse.summarize import batch_generate_summaries
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ async def _send_notification(bot: Bot, telegram_id: int, topic: Topic, article: 
     """Send a single article notification. Returns False if user blocked the bot."""
     text = format_notification(
         title=article.title,
-        content=article.content or article.summary,
+        content=article.summary or article.content,
         source=article.source,
         url=article.url,
         topic_text=topic.topic_text,
@@ -135,6 +136,19 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
 
         relevant = await batch_check_relevance(topic.topic_text, candidates_scraped)
         logger.info("Topic %r: %d relevant articles.", topic.topic_text, len(relevant))
+
+        # Generate summaries for relevant articles that have content
+        articles_with_content = [
+            (a, a.content) for a in relevant if a.content and len(a.content) > 100
+        ]
+        if articles_with_content:
+            summaries = await batch_generate_summaries(
+                [(a.title, content) for a, content in articles_with_content]
+            )
+            for (article, _), summary in zip(articles_with_content, summaries):
+                if summary:
+                    article.summary = summary
+                    await repo.update_article_summary(article.id, summary)
 
         for article in relevant:
             if await repo.is_article_sent(article.id, topic.id):

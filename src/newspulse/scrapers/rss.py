@@ -1,20 +1,23 @@
+import asyncio
 import logging
 
 import feedparser
 import httpx
 
-from newspulse.scrapers.base import HEADERS, BaseScraper, ScrapedArticle
+from newspulse.scrapers.base import HEADERS, BaseScraper, ScrapedArticle, _fetch_article_content
 
 logger = logging.getLogger(__name__)
 
 RSS_FEEDS = [
     ("BBC World", "http://feeds.bbci.co.uk/news/world/rss.xml"),
     ("Al Jazeera", "https://www.aljazeera.com/xml/rss/all.xml"),
-    ("Reuters", "https://feeds.reuters.com/reuters/topNews"),
     ("CivilNet", "https://www.civilnet.am/feed/"),
-    ("1Lurer", "https://www.1lurer.am/en/rss"),
+    ("1Lurer", "https://www.1lurer.am/hy/rss"),
     ("NEWS.am", "https://news.am/arm/rss/"),
     ("Azatutyun", "https://www.azatutyun.am/api/"),
+    ("Hetq", "https://hetq.am/hy/rss"),
+    ("Mediamax", "https://mediamax.am/am/index.rss"),
+    ("APA", "https://en.apa.az/rss"),
 ]
 
 
@@ -34,13 +37,11 @@ class RssScraper(BaseScraper):
                     url = entry.get("link", "").strip()
                     if not title or not url:
                         continue
-                    summary = (
-                        entry.get("summary", "")
-                        or entry.get("description", "")
-                    ).strip()
+                    summary = (entry.get("summary", "") or entry.get("description", "")).strip()
                     # Strip HTML tags from summary if present
                     if "<" in summary:
                         from bs4 import BeautifulSoup
+
                         summary = BeautifulSoup(summary, "lxml").get_text(separator=" ", strip=True)
                     published_at = None
                     if hasattr(entry, "published"):
@@ -57,4 +58,18 @@ class RssScraper(BaseScraper):
                     )
             except Exception as e:
                 logger.error("RSS feed %s failed: %s", feed_url, e)
+
+        # Fetch full article content for articles with no/short summary (title-only feeds)
+        needs_content = [(i, a) for i, a in enumerate(articles) if len(a.summary) < 50]
+        if needs_content:
+            fetched = await asyncio.gather(
+                *[_fetch_article_content(client, a.url) for _, a in needs_content],
+                return_exceptions=True,
+            )
+            for (idx, article), body in zip(needs_content, fetched):
+                if isinstance(body, str) and body:
+                    article.content = body
+                    if not article.summary:
+                        article.summary = body[:500]
+
         return articles

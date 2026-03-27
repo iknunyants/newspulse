@@ -166,6 +166,13 @@ class Repository:
             row = await cur.fetchone()
         return Article(**row), True
 
+    async def update_article_summary(self, article_id: int, summary: str) -> None:
+        await self._conn.execute(
+            "UPDATE articles SET summary = ? WHERE id = ?",
+            (summary[:500], article_id),
+        )
+        await self._conn.commit()
+
     async def is_article_sent(self, article_id: int, topic_id: int) -> bool:
         async with self._conn.execute(
             "SELECT 1 FROM sent_articles WHERE article_id = ? AND topic_id = ?",
