@@ -13,6 +13,7 @@ from newspulse.db.repository import Repository
 from newspulse.formatting import format_notification
 from newspulse.matching.keywords import article_matches_keywords
 from newspulse.matching.relevance import batch_check_relevance
+from newspulse.scrapers import SOURCE_LANGUAGES
 from newspulse.scrapers.web import get_all_scrapers
 
 logger = logging.getLogger(__name__)
@@ -71,7 +72,9 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
         for source in sources_in_batch:
             if await repo.get_last_scrape_time(source) is None:
                 first_scrape_sources.add(source)
-                logger.info("Source %r: first scrape — storing baseline, skipping notifications.", source)
+                logger.info(
+                    "Source %r: first scrape — storing baseline, skipping notifications.", source
+                )
 
         for sa in scraped:
             try:
@@ -100,13 +103,24 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
     if not topics:
         return
 
+    # Build per-user language preferences (fetched once per user)
+    user_languages: dict[int, list[str]] = {}
+    for topic in topics:
+        if topic.user_id not in user_languages:
+            user_languages[topic.user_id] = await repo.get_user_languages(topic.user_id)
+
     # Group topics by user for deactivation tracking
     user_blocked: dict[int, bool] = {}
 
     for topic in topics:
+        user_langs = user_languages.get(topic.user_id, ["en", "hy", "ru"])
+        lang_filtered = [
+            a for a in new_articles
+            if SOURCE_LANGUAGES.get(a.source, "en") in user_langs
+        ]
         keywords = json.loads(topic.keywords_json)
         candidates_scraped = [
-            a for a in new_articles
+            a for a in lang_filtered
             if article_matches_keywords(a.title, a.summary, keywords)
         ]
 

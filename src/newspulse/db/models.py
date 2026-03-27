@@ -6,6 +6,7 @@ class User:
     id: int
     telegram_id: int
     created_at: str
+    languages_json: str = '["en","hy","ru"]'
 
 
 @dataclass

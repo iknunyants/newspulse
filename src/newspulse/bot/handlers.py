@@ -1,3 +1,4 @@
+import json
 import logging
 
 from telegram import (
@@ -13,6 +14,7 @@ from newspulse.config import settings
 from newspulse.db.repository import Repository
 from newspulse.formatting import escape_md as _esc
 from newspulse.matching.keywords import generate_keywords
+from newspulse.scrapers import SUPPORTED_LANGUAGES
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +24,7 @@ WAITING_FOR_TOPIC = 0
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("➕ Add Topic"), KeyboardButton("📋 My Topics")],
-        [KeyboardButton("❌ Remove Topic")],
+        [KeyboardButton("❌ Remove Topic"), KeyboardButton("🌐 Languages")],
     ],
     resize_keyboard=True,
 )
@@ -53,10 +55,82 @@ def _post_action_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def _language_keyboard(selected: list[str]) -> InlineKeyboardMarkup:
+    """Build the language toggle inline keyboard."""
+    buttons = [
+        InlineKeyboardButton(
+            f"{'✅' if code in selected else '⬜'} {name}",
+            callback_data=f"lang_toggle:{code}",
+        )
+        for code, name in SUPPORTED_LANGUAGES.items()
+    ]
+    done_row = [InlineKeyboardButton("Done ✓", callback_data="lang_done")]
+    return InlineKeyboardMarkup([buttons, done_row])
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     repo = _get_repo(context)
-    await repo.get_or_create_user(update.effective_user.id)
+    user = await repo.get_or_create_user(update.effective_user.id)
     await update.message.reply_text(WELCOME, parse_mode="MarkdownV2", reply_markup=MAIN_KEYBOARD)
+
+    current = json.loads(user.languages_json)
+    await update.message.reply_text(
+        "🌐 *Choose your news languages:*\nYou'll only receive articles in selected languages\\.",
+        parse_mode="MarkdownV2",
+        reply_markup=_language_keyboard(current),
+    )
+
+
+async def languages_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the language selection keyboard."""
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(update.effective_user.id)
+    current = json.loads(user.languages_json)
+    await update.message.reply_text(
+        "🌐 *Choose your news languages:*\nYou'll only receive articles in selected languages\\.",
+        parse_mode="MarkdownV2",
+        reply_markup=_language_keyboard(current),
+    )
+
+
+async def lang_toggle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle a language on/off."""
+    query = update.callback_query
+    await query.answer()
+
+    code = query.data.split(":", 1)[1]
+    if code not in SUPPORTED_LANGUAGES:
+        return
+
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(query.from_user.id)
+    current: list[str] = json.loads(user.languages_json)
+
+    if code in current:
+        if len(current) == 1:
+            await query.answer("You must keep at least one language selected.", show_alert=True)
+            return
+        current.remove(code)
+    else:
+        current.append(code)
+
+    await repo.set_user_languages(user.id, current)
+    await query.edit_message_reply_markup(reply_markup=_language_keyboard(current))
+
+
+async def lang_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Confirm language selection."""
+    query = update.callback_query
+    await query.answer()
+
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(query.from_user.id)
+    current: list[str] = json.loads(user.languages_json)
+    names = ", ".join(SUPPORTED_LANGUAGES[c] for c in current if c in SUPPORTED_LANGUAGES)
+    await query.edit_message_text(
+        f"✅ Languages set: *{_esc(names)}*",
+        parse_mode="MarkdownV2",
+    )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

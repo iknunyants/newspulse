@@ -27,7 +27,7 @@ class Repository:
 
     async def get_or_create_user(self, telegram_id: int) -> User:
         async with self._conn.execute(
-            "SELECT id, telegram_id, created_at FROM users WHERE telegram_id = ?",
+            "SELECT id, telegram_id, created_at, languages_json FROM users WHERE telegram_id = ?",
             (telegram_id,),
         ) as cur:
             row = await cur.fetchone()
@@ -38,11 +38,27 @@ class Repository:
         )
         await self._conn.commit()
         async with self._conn.execute(
-            "SELECT id, telegram_id, created_at FROM users WHERE telegram_id = ?",
+            "SELECT id, telegram_id, created_at, languages_json FROM users WHERE telegram_id = ?",
             (telegram_id,),
         ) as cur:
             row = await cur.fetchone()
         return User(**row)
+
+    async def set_user_languages(self, user_id: int, languages: list[str]) -> None:
+        await self._conn.execute(
+            "UPDATE users SET languages_json = ? WHERE id = ?",
+            (json.dumps(languages, ensure_ascii=False), user_id),
+        )
+        await self._conn.commit()
+
+    async def get_user_languages(self, user_id: int) -> list[str]:
+        async with self._conn.execute(
+            "SELECT languages_json FROM users WHERE id = ?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return ["en", "hy", "ru"]
+        return json.loads(row["languages_json"])
 
     # --- Topics ---
 
