@@ -40,6 +40,7 @@ WELCOME = (
     "/pause\\_topic — Pause a topic temporarily\n"
     "/resume\\_topic — Resume a paused topic\n"
     "/stats — Your topic match statistics\n"
+    "/digest — Toggle daily digest mode\n"
     "/languages — Choose news languages\n"
     "/sources — Choose which news sources to follow\n"
     "/help — Show this message"
@@ -592,6 +593,89 @@ async def action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await context.bot.send_message(
             chat_id, "What topic would you like to monitor?"
         )
+
+
+def _digest_keyboard(enabled: bool, hour: int) -> InlineKeyboardMarkup:
+    """Inline keyboard for digest mode toggle and hour selection."""
+    toggle_label = "✅ Digest ON — turn off" if enabled else "⬜ Digest OFF — turn on"
+    rows = [
+        [InlineKeyboardButton(toggle_label, callback_data="digest_toggle")],
+    ]
+    if enabled:
+        # Hour selection: show a row of quick-pick hours
+        rows.append([
+            InlineKeyboardButton(
+                f"{'▶' if h == hour else ''}{h:02d}:00 UTC",
+                callback_data=f"digest_hour:{h}",
+            )
+            for h in [6, 9, 12, 18, 21]
+        ])
+    rows.append([InlineKeyboardButton("Done ✓", callback_data="digest_done")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def digest_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Toggle digest mode and choose delivery hour."""
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(update.effective_user.id)
+    status = "ON" if user.digest_mode else "OFF"
+    await update.message.reply_text(
+        f"📬 *Digest mode is currently {_esc(status)}*\n\n"
+        "In digest mode you receive one daily summary instead of real\\-time "
+        "notifications\\. Choose your preferred delivery hour in UTC\\.",
+        parse_mode="MarkdownV2",
+        reply_markup=_digest_keyboard(user.digest_mode, user.digest_hour),
+    )
+
+
+async def digest_toggle_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(query.from_user.id)
+    new_mode = not user.digest_mode
+    await repo.set_digest_mode(user.id, new_mode, user.digest_hour)
+    await query.edit_message_reply_markup(
+        reply_markup=_digest_keyboard(new_mode, user.digest_hour)
+    )
+
+
+async def digest_hour_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    hour = int(query.data.split(":")[1])
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(query.from_user.id)
+    await repo.set_digest_mode(user.id, user.digest_mode, hour)
+    await query.edit_message_reply_markup(
+        reply_markup=_digest_keyboard(user.digest_mode, hour)
+    )
+
+
+async def digest_done_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(query.from_user.id)
+    if user.digest_mode:
+        msg = (
+            f"✅ Digest mode ON — you'll receive a daily summary at "
+            f"*{user.digest_hour:02d}:00 UTC*\\."
+        )
+    else:
+        msg = "⬜ Digest mode OFF — you'll receive real\\-time notifications\\."
+    await query.edit_message_text(msg, parse_mode="MarkdownV2")
 
 
 async def stats_command(

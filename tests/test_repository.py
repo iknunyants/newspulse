@@ -269,6 +269,80 @@ async def test_feedback_stats_empty(repo: Repository):
     assert neg == 0
 
 
+async def test_digest_mode_default(repo: Repository):
+    user = await repo.get_or_create_user(100)
+    assert user.digest_mode is False
+    assert user.digest_hour == 9
+
+
+async def test_set_digest_mode(repo: Repository):
+    user = await repo.get_or_create_user(100)
+    await repo.set_digest_mode(user.id, enabled=True, hour=18)
+    updated = await repo.get_user_by_id(user.id)
+    assert updated.digest_mode is True
+    assert updated.digest_hour == 18
+
+
+async def test_get_users_for_digest(repo: Repository):
+    user = await repo.get_or_create_user(100)
+    await repo.set_digest_mode(user.id, enabled=True, hour=9)
+
+    users_at_9 = await repo.get_users_for_digest(9)
+    assert len(users_at_9) == 1
+    assert users_at_9[0].id == user.id
+
+    users_at_10 = await repo.get_users_for_digest(10)
+    assert len(users_at_10) == 0
+
+
+async def test_digest_queue_and_clear(repo: Repository):
+    user = await repo.get_or_create_user(100)
+    topic = await repo.add_topic(user.id, "test", ["kw"])
+    article, _ = await repo.upsert_article(
+        source="Test", title="T", url="https://example.com/1",
+        summary="S", published_at=None,
+    )
+
+    await repo.queue_digest_article(user.id, article.id, topic.id)
+    items = await repo.get_digest_queue(user.id)
+    assert len(items) == 1
+    assert items[0][0].id == article.id
+    assert items[0][1][0].id == topic.id
+
+    await repo.clear_digest_queue(user.id)
+    items = await repo.get_digest_queue(user.id)
+    assert len(items) == 0
+
+
+async def test_digest_queue_groups_by_article(repo: Repository):
+    """Multiple topics for the same article appear as one entry."""
+    user = await repo.get_or_create_user(100)
+    t1 = await repo.add_topic(user.id, "topic1", ["kw1"])
+    t2 = await repo.add_topic(user.id, "topic2", ["kw2"])
+    article, _ = await repo.upsert_article(
+        source="Test", title="T", url="https://example.com/1",
+        summary="S", published_at=None,
+    )
+
+    await repo.queue_digest_article(user.id, article.id, t1.id)
+    await repo.queue_digest_article(user.id, article.id, t2.id)
+    items = await repo.get_digest_queue(user.id)
+    assert len(items) == 1  # One article
+    assert len(items[0][1]) == 2  # Two topics
+
+
+async def test_get_user_by_id(repo: Repository):
+    user = await repo.get_or_create_user(100)
+    fetched = await repo.get_user_by_id(user.id)
+    assert fetched.id == user.id
+    assert fetched.telegram_id == 100
+
+
+async def test_get_user_by_id_not_found(repo: Repository):
+    result = await repo.get_user_by_id(9999)
+    assert result is None
+
+
 async def test_delete_old_articles(repo: Repository):
     # Insert an article, then backdate it to 60 days ago
     article, _ = await repo.upsert_article(

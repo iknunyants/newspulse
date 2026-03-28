@@ -8,6 +8,8 @@ class User:
     created_at: str
     languages_json: str = '["en","hy"]'
     sources_json: str | None = None
+    digest_mode: bool = False
+    digest_hour: int = 9  # UTC hour (0-23) for digest delivery
 
 
 @dataclass

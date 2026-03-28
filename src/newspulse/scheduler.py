@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import json
 import logging
 
@@ -10,7 +11,7 @@ from telegram.error import Forbidden, TelegramError
 
 from newspulse.db.models import Article, Topic
 from newspulse.db.repository import Repository
-from newspulse.formatting import format_notification
+from newspulse.formatting import format_digest, format_notification
 from newspulse.matching.keywords import article_matches_keywords
 from newspulse.matching.relevance import batch_check_relevance
 from newspulse.scrapers import SOURCE_LANGUAGES
@@ -111,14 +112,21 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
     if not topics:
         return
 
-    # Build per-user language and source preferences (fetched once per user)
+    # Build per-user preferences (fetched once per user)
     user_languages: dict[int, list[str]] = {}
     user_sources: dict[int, list[str] | None] = {}
+    user_digest: dict[int, bool] = {}
+    user_telegram: dict[int, int] = {}
     for topic in topics:
-        if topic.user_id not in user_languages:
-            user_languages[topic.user_id] = await repo.get_user_languages(topic.user_id)
-        if topic.user_id not in user_sources:
-            user_sources[topic.user_id] = await repo.get_user_sources(topic.user_id)
+        uid = topic.user_id
+        if uid not in user_languages:
+            user_languages[uid] = await repo.get_user_languages(uid)
+        if uid not in user_sources:
+            user_sources[uid] = await repo.get_user_sources(uid)
+        if uid not in user_digest:
+            u = await repo.get_user_by_id(uid)
+            user_digest[uid] = u.digest_mode if u else False
+            user_telegram[uid] = u.telegram_id if u else 0
 
     # 4. Match articles to topics, accumulating per (user, article) to avoid duplicate messages
     # pending: {(user_id, article_id): (telegram_id, article, [matching topics])}
@@ -165,8 +173,7 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
                     article.summary = summary
                     await repo.update_article_summary(article.id, summary)
 
-        # Get telegram_id for this user (needed for the send step)
-        telegram_id = await repo.get_telegram_id(topic.user_id)
+        telegram_id = user_telegram.get(topic.user_id, 0)
         if not telegram_id:
             continue
 
@@ -176,7 +183,8 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
                 pending[key] = (telegram_id, article, [])
             pending[key][2].append(topic)
 
-    # 5. Send one notification per (user, article), listing all matching topics
+    # 5. Send one notification per (user, article), listing all matching topics.
+    #    Digest-mode users get articles queued instead of sent immediately.
     user_blocked: dict[int, bool] = {}
 
     for (user_id, _article_id), (telegram_id, article, matched_topics) in pending.items():
@@ -188,6 +196,13 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
             if not await repo.is_article_sent(article.id, t.id)
         ]
         if not unsent_topics:
+            continue
+
+        if user_digest.get(user_id):
+            # Queue for digest delivery — mark sent to prevent re-queueing next cycle
+            for t in unsent_topics:
+                await repo.queue_digest_article(user_id, article.id, t.id)
+                await repo.mark_article_sent(article.id, t.id)
             continue
 
         success = await _send_notification(bot, telegram_id, unsent_topics, article)
@@ -206,6 +221,52 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
         logger.info("Cleaned up %d old articles.", deleted)
 
 
+async def send_digests(repo: Repository, bot: Bot) -> None:
+    """Send queued digest articles to users whose digest_hour matches the current UTC hour."""
+    current_hour = datetime.datetime.utcnow().hour
+    users = await repo.get_users_for_digest(current_hour)
+    if not users:
+        return
+
+    logger.info("Sending digests for hour %d UTC (%d users).", current_hour, len(users))
+
+    for user in users:
+        items = await repo.get_digest_queue(user.id)
+        if not items:
+            continue
+
+        # Build digest payload: (title, summary, source, url, topic_texts)
+        payload = [
+            (
+                article.title,
+                article.summary or article.content,
+                article.source,
+                article.url,
+                [t.topic_text for t in topics],
+            )
+            for article, topics in items
+        ]
+
+        text = format_digest(payload)
+        try:
+            await bot.send_message(
+                chat_id=user.telegram_id,
+                text=text,
+                parse_mode="MarkdownV2",
+                disable_web_page_preview=True,
+            )
+            await repo.clear_digest_queue(user.id)
+            logger.info(
+                "Sent digest to user %d (%d articles).",
+                user.telegram_id, len(items),
+            )
+        except Forbidden:
+            logger.warning("Digest: user %d blocked the bot.", user.telegram_id)
+            await repo.deactivate_all_topics(user.id)
+        except TelegramError as e:
+            logger.error("Digest: failed to send to %d: %s", user.telegram_id, e)
+
+
 def setup_scheduler(repo: Repository, bot: Bot, interval_minutes: int) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
@@ -213,6 +274,14 @@ def setup_scheduler(repo: Repository, bot: Bot, interval_minutes: int) -> AsyncI
         trigger=IntervalTrigger(minutes=interval_minutes),
         args=[repo, bot],
         id="scrape_job",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        send_digests,
+        trigger=IntervalTrigger(hours=1),
+        args=[repo, bot],
+        id="digest_job",
         replace_existing=True,
         misfire_grace_time=300,
     )

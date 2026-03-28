@@ -18,6 +18,10 @@ from newspulse.bot.handlers import (
     add_topic_entry,
     add_topic_receive,
     confirm_add_callback,
+    digest_command,
+    digest_done_callback,
+    digest_hour_callback,
+    digest_toggle_callback,
     feedback_callback,
     free_text_handler,
     help_command,
@@ -91,6 +95,10 @@ def create_app(settings: Settings, repo: Repository) -> Application:
     app.add_handler(MessageHandler(filters.Regex("^📰 Sources$"), sources_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(MessageHandler(filters.Regex("^📊 Stats$"), stats_command))
+    app.add_handler(CommandHandler("digest", digest_command))
+    app.add_handler(CallbackQueryHandler(digest_toggle_callback, pattern=r"^digest_toggle$"))
+    app.add_handler(CallbackQueryHandler(digest_hour_callback, pattern=r"^digest_hour:"))
+    app.add_handler(CallbackQueryHandler(digest_done_callback, pattern=r"^digest_done$"))
     app.add_handler(CommandHandler("pause_topic", pause_topic_command))
     app.add_handler(CommandHandler("resume_topic", resume_topic_command))
     app.add_handler(CallbackQueryHandler(feedback_callback, pattern=r"^fb:"))

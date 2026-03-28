@@ -68,3 +68,26 @@ def format_notification(
     parts.append(f"[Read article]({escape_url(url)})")
 
     return "\n\n".join(parts)
+
+
+def format_digest(
+    items: list[tuple[str, str, str, str, list[str]]],
+) -> str:
+    """Build a MarkdownV2 daily digest message.
+
+    Each item is (title, summary, source, url, topic_texts).
+    Groups articles with a numbered list.
+    """
+    header = "📰 *Your Daily Digest*\n"
+    lines: list[str] = [header]
+    for i, (title, summary, source, url, topic_texts) in enumerate(items, 1):
+        short = extract_summary(summary, max_sentences=1)
+        topics_str = escape_md(", ".join(topic_texts))
+        entry = (
+            f"*{i}\\. {escape_md(title)}*\n"
+            f"{escape_md(short)}\n"
+            f"📰 _{escape_md(source)}_ · 🏷 _{topics_str}_\n"
+            f"[Read]({escape_url(url)})"
+        )
+        lines.append(entry)
+    return "\n\n".join(lines)

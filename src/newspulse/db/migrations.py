@@ -104,4 +104,26 @@ async def init_db(conn: aiosqlite.Connection) -> None:
         "  UNIQUE(user_id, article_id)"
         ")"
     )
+    try:
+        await conn.execute(
+            "ALTER TABLE users ADD COLUMN digest_mode INTEGER NOT NULL DEFAULT 0"
+        )
+    except Exception:
+        pass  # Column already exists
+    try:
+        await conn.execute(
+            "ALTER TABLE users ADD COLUMN digest_hour INTEGER NOT NULL DEFAULT 9"
+        )
+    except Exception:
+        pass  # Column already exists
+    await conn.execute(
+        "CREATE TABLE IF NOT EXISTS digest_queue ("
+        "  id         INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  user_id    INTEGER NOT NULL REFERENCES users(id),"
+        "  article_id INTEGER NOT NULL REFERENCES articles(id),"
+        "  topic_id   INTEGER NOT NULL REFERENCES topics(id),"
+        "  queued_at  TEXT NOT NULL DEFAULT (datetime('now')),"
+        "  UNIQUE(user_id, article_id, topic_id)"
+        ")"
+    )
     await conn.commit()

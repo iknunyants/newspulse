@@ -25,26 +25,40 @@ class Repository:
 
     # --- Users ---
 
+    _USER_COLS = (
+        "id, telegram_id, created_at, languages_json, sources_json,"
+        " digest_mode, digest_hour"
+    )
+
+    def _row_to_user(self, row: aiosqlite.Row) -> User:
+        return User(
+            id=row["id"],
+            telegram_id=row["telegram_id"],
+            created_at=row["created_at"],
+            languages_json=row["languages_json"],
+            sources_json=row["sources_json"],
+            digest_mode=bool(row["digest_mode"]),
+            digest_hour=row["digest_hour"],
+        )
+
     async def get_or_create_user(self, telegram_id: int) -> User:
         async with self._conn.execute(
-            "SELECT id, telegram_id, created_at, languages_json, sources_json"
-            " FROM users WHERE telegram_id = ?",
+            f"SELECT {self._USER_COLS} FROM users WHERE telegram_id = ?",
             (telegram_id,),
         ) as cur:
             row = await cur.fetchone()
         if row:
-            return User(**row)
+            return self._row_to_user(row)
         await self._conn.execute(
             "INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (telegram_id,)
         )
         await self._conn.commit()
         async with self._conn.execute(
-            "SELECT id, telegram_id, created_at, languages_json, sources_json"
-            " FROM users WHERE telegram_id = ?",
+            f"SELECT {self._USER_COLS} FROM users WHERE telegram_id = ?",
             (telegram_id,),
         ) as cur:
             row = await cur.fetchone()
-        return User(**row)
+        return self._row_to_user(row)
 
     async def set_user_languages(self, user_id: int, languages: list[str]) -> None:
         await self._conn.execute(
@@ -221,6 +235,14 @@ class Repository:
             row = await cur.fetchone()
         return row["telegram_id"] if row else None
 
+    async def get_user_by_id(self, user_id: int) -> User | None:
+        """Get a user by internal ID."""
+        async with self._conn.execute(
+            f"SELECT {self._USER_COLS} FROM users WHERE id = ?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return self._row_to_user(row) if row else None
+
     # --- Articles ---
 
     @staticmethod
@@ -356,6 +378,89 @@ class Repository:
         ) as cur:
             row = await cur.fetchone()
         return (row["pos"] or 0, row["neg"] or 0)
+
+    # --- Digest ---
+
+    async def set_digest_mode(
+        self, user_id: int, enabled: bool, hour: int = 9
+    ) -> None:
+        """Enable or disable digest mode for a user."""
+        await self._conn.execute(
+            "UPDATE users SET digest_mode = ?, digest_hour = ? WHERE id = ?",
+            (int(enabled), hour, user_id),
+        )
+        await self._conn.commit()
+
+    async def get_users_for_digest(self, current_hour: int) -> list[User]:
+        """Get all users with digest_mode=1 whose digest_hour matches current_hour."""
+        async with self._conn.execute(
+            f"SELECT {self._USER_COLS} FROM users "
+            "WHERE digest_mode = 1 AND digest_hour = ?",
+            (current_hour,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [self._row_to_user(r) for r in rows]
+
+    async def queue_digest_article(
+        self, user_id: int, article_id: int, topic_id: int
+    ) -> None:
+        """Add an article to a user's digest queue."""
+        await self._conn.execute(
+            "INSERT OR IGNORE INTO digest_queue "
+            "(user_id, article_id, topic_id) VALUES (?, ?, ?)",
+            (user_id, article_id, topic_id),
+        )
+        await self._conn.commit()
+
+    async def get_digest_queue(
+        self, user_id: int
+    ) -> list[tuple[Article, list[Topic]]]:
+        """Return pending digest items grouped by article for a user."""
+        async with self._conn.execute(
+            "SELECT a.id, a.url_hash, a.source, a.title, a.url, a.summary, "
+            "  a.published_at, a.created_at, a.content, "
+            "  t.id as t_id, t.user_id as t_user_id, t.topic_text, "
+            "  t.keywords_json, t.active, t.created_at as t_created, t.paused "
+            "FROM digest_queue dq "
+            "JOIN articles a ON a.id = dq.article_id "
+            "JOIN topics t ON t.id = dq.topic_id "
+            "WHERE dq.user_id = ? "
+            "ORDER BY a.id, t.id",
+            (user_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+
+        grouped: dict[int, tuple[Article, list[Topic]]] = {}
+        for r in rows:
+            art_id = r["id"]
+            if art_id not in grouped:
+                grouped[art_id] = (
+                    Article(
+                        id=r["id"], url_hash=r["url_hash"], source=r["source"],
+                        title=r["title"], url=r["url"], summary=r["summary"],
+                        published_at=r["published_at"], created_at=r["created_at"],
+                        content=r["content"],
+                    ),
+                    [],
+                )
+            grouped[art_id][1].append(
+                Topic(
+                    id=r["t_id"], user_id=r["t_user_id"],
+                    topic_text=r["topic_text"],
+                    keywords_json=r["keywords_json"],
+                    active=bool(r["active"]),
+                    created_at=r["t_created"],
+                    paused=bool(r["paused"]),
+                )
+            )
+        return list(grouped.values())
+
+    async def clear_digest_queue(self, user_id: int) -> None:
+        """Clear all queued digest items for a user after sending."""
+        await self._conn.execute(
+            "DELETE FROM digest_queue WHERE user_id = ?", (user_id,)
+        )
+        await self._conn.commit()
 
     # --- Cleanup ---
 
