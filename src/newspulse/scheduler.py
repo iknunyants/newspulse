@@ -13,7 +13,7 @@ from newspulse.db.models import Article, Topic
 from newspulse.db.repository import Repository
 from newspulse.formatting import format_digest, format_notification
 from newspulse.matching.keywords import article_matches_keywords
-from newspulse.matching.relevance import batch_check_relevance
+from newspulse.matching.relevance import batch_check_multi_topic_relevance
 from newspulse.scrapers import SOURCE_LANGUAGES
 from newspulse.scrapers.web import get_all_scrapers
 from newspulse.summarize import batch_generate_summaries
@@ -128,60 +128,73 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
             user_digest[uid] = u.digest_mode if u else False
             user_telegram[uid] = u.telegram_id if u else 0
 
-    # 4. Match articles to topics, accumulating per (user, article) to avoid duplicate messages
-    # pending: {(user_id, article_id): (telegram_id, article, [matching topics])}
-    pending: dict[tuple[int, int], tuple[int, Article, list[Topic]]] = {}
+    # 4. Match articles to topics using article-first batching to minimize LLM calls.
+    #
+    #    First pass (keyword): for each article, collect candidate topics per user.
+    #    Second pass (LLM): one call per (user, article) pair instead of per topic.
+    #
+    # article_candidates: {article_id: {user_id: [topics]}}
+    article_candidates: dict[int, dict[int, list[Topic]]] = {}
 
     for topic in topics:
         user_langs = user_languages.get(topic.user_id, ["en", "hy"])
-        lang_filtered = [
-            a for a in new_articles
-            if SOURCE_LANGUAGES.get(a.source, "en") in user_langs
-        ]
         user_srcs = user_sources.get(topic.user_id)
-        if user_srcs is not None:
-            allowed = set(user_srcs)
-            lang_filtered = [a for a in lang_filtered if a.source in allowed]
+        allowed = set(user_srcs) if user_srcs is not None else None
         keywords = json.loads(topic.keywords_json)
-        candidates_scraped = [
-            a for a in lang_filtered
-            if article_matches_keywords(a.title, a.summary, keywords)
-        ]
 
-        if not candidates_scraped:
-            continue
+        for article in new_articles:
+            if SOURCE_LANGUAGES.get(article.source, "en") not in user_langs:
+                continue
+            if allowed is not None and article.source not in allowed:
+                continue
+            if not article_matches_keywords(article.title, article.summary, keywords):
+                continue
+            article_candidates.setdefault(article.id, {}).setdefault(
+                topic.user_id, []
+            ).append(topic)
 
-        logger.debug(
-            "Topic %r: %d keyword matches, running LLM check...",
-            topic.topic_text,
-            len(candidates_scraped),
-        )
+    # pending: {(user_id, article_id): (telegram_id, article, [matching topics])}
+    pending: dict[tuple[int, int], tuple[int, Article, list[Topic]]] = {}
 
-        relevant = await batch_check_relevance(topic.topic_text, candidates_scraped)
-        logger.info("Topic %r: %d relevant articles.", topic.topic_text, len(relevant))
+    # Build article lookup for fast access
+    article_by_id: dict[int, Article] = {a.id: a for a in new_articles}
 
-        # Generate summaries for relevant articles that have content
-        articles_with_content = [
-            (a, a.content) for a in relevant if a.content and len(a.content) > 100
-        ]
-        if articles_with_content:
-            summaries = await batch_generate_summaries(
-                [(a.title, content) for a, content in articles_with_content]
+    for article_id, user_topics in article_candidates.items():
+        article = article_by_id[article_id]
+        for user_id, candidate_topics in user_topics.items():
+            telegram_id = user_telegram.get(user_id, 0)
+            if not telegram_id:
+                continue
+
+            logger.debug(
+                "Article %r: %d candidate topics for user %d, running LLM check...",
+                article.title, len(candidate_topics), user_id,
             )
-            for (article, _), summary in zip(articles_with_content, summaries):
-                if summary:
-                    article.summary = summary
-                    await repo.update_article_summary(article.id, summary)
 
-        telegram_id = user_telegram.get(topic.user_id, 0)
-        if not telegram_id:
-            continue
+            relevant_topics = await batch_check_multi_topic_relevance(
+                article, candidate_topics
+            )
+            if not relevant_topics:
+                continue
 
-        for article in relevant:
-            key = (topic.user_id, article.id)
+            logger.info(
+                "Article %r: %d/%d topics relevant for user %d.",
+                article.title, len(relevant_topics), len(candidate_topics), user_id,
+            )
+
+            # Generate summary once per article (not per topic)
+            if article.content and len(article.content) > 100 and not article.summary:
+                summaries = await batch_generate_summaries(
+                    [(article.title, article.content)]
+                )
+                if summaries and summaries[0]:
+                    article.summary = summaries[0]
+                    await repo.update_article_summary(article.id, summaries[0])
+
+            key = (user_id, article_id)
             if key not in pending:
                 pending[key] = (telegram_id, article, [])
-            pending[key][2].append(topic)
+            pending[key][2].extend(relevant_topics)
 
     # 5. Send one notification per (user, article), listing all matching topics.
     #    Digest-mode users get articles queued instead of sent immediately.
