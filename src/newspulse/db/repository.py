@@ -89,7 +89,8 @@ class Repository:
         )
         await self._conn.commit()
         async with self._conn.execute(
-            "SELECT id, user_id, topic_text, keywords_json, active, created_at "
+            "SELECT id, user_id, topic_text, keywords_json, active, "
+            "created_at, paused "
             "FROM topics WHERE user_id = ? ORDER BY id DESC LIMIT 1",
             (user_id,),
         ) as cur:
@@ -101,6 +102,7 @@ class Repository:
             keywords_json=row["keywords_json"],
             active=bool(row["active"]),
             created_at=row["created_at"],
+            paused=bool(row["paused"]),
         )
 
     async def count_active_topics(self, user_id: int) -> int:
@@ -111,17 +113,23 @@ class Repository:
             row = await cur.fetchone()
         return row[0]
 
-    async def get_active_topics(self, user_id: int | None = None) -> list[Topic]:
+    async def get_active_topics(
+        self, user_id: int | None = None, include_paused: bool = False
+    ) -> list[Topic]:
+        paused_filter = "" if include_paused else " AND paused = 0"
         if user_id is not None:
             query = (
-                "SELECT id, user_id, topic_text, keywords_json, active, created_at "
-                "FROM topics WHERE user_id = ? AND active = 1 ORDER BY id"
+                "SELECT id, user_id, topic_text, keywords_json, active, "
+                "created_at, paused "
+                f"FROM topics WHERE user_id = ? AND active = 1{paused_filter}"
+                " ORDER BY id"
             )
             params = (user_id,)
         else:
             query = (
-                "SELECT id, user_id, topic_text, keywords_json, active, created_at "
-                "FROM topics WHERE active = 1 ORDER BY id"
+                "SELECT id, user_id, topic_text, keywords_json, active, "
+                "created_at, paused "
+                f"FROM topics WHERE active = 1{paused_filter} ORDER BY id"
             )
             params = ()
         async with self._conn.execute(query, params) as cur:
@@ -134,6 +142,7 @@ class Repository:
                 keywords_json=r["keywords_json"],
                 active=bool(r["active"]),
                 created_at=r["created_at"],
+                paused=bool(r["paused"]),
             )
             for r in rows
         ]
@@ -154,6 +163,46 @@ class Repository:
         )
         await self._conn.commit()
         return result.rowcount
+
+    async def pause_topic(self, topic_id: int, user_id: int) -> bool:
+        """Pause an active topic. Returns True if paused."""
+        result = await self._conn.execute(
+            "UPDATE topics SET paused = 1 "
+            "WHERE id = ? AND user_id = ? AND active = 1 AND paused = 0",
+            (topic_id, user_id),
+        )
+        await self._conn.commit()
+        return result.rowcount > 0
+
+    async def resume_topic(self, topic_id: int, user_id: int) -> bool:
+        """Resume a paused topic. Returns True if resumed."""
+        result = await self._conn.execute(
+            "UPDATE topics SET paused = 0 "
+            "WHERE id = ? AND user_id = ? AND active = 1 AND paused = 1",
+            (topic_id, user_id),
+        )
+        await self._conn.commit()
+        return result.rowcount > 0
+
+    async def get_paused_topics(self, user_id: int) -> list[Topic]:
+        """Get all paused (but active) topics for a user."""
+        async with self._conn.execute(
+            "SELECT id, user_id, topic_text, keywords_json, active, created_at "
+            "FROM topics WHERE user_id = ? AND active = 1 AND paused = 1 "
+            "ORDER BY id",
+            (user_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [
+            Topic(
+                id=r["id"], user_id=r["user_id"],
+                topic_text=r["topic_text"],
+                keywords_json=r["keywords_json"],
+                active=bool(r["active"]),
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
 
     async def deactivate_all_topics(self, user_id: int) -> int:
         """Deactivate all topics for a user. Returns number deactivated."""

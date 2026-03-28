@@ -18,6 +18,7 @@ class Topic:
     keywords_json: str
     active: bool
     created_at: str
+    paused: bool = False
 
 
 @dataclass

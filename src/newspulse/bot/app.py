@@ -24,8 +24,12 @@ from newspulse.bot.handlers import (
     lang_toggle_callback,
     languages_command,
     list_topics,
+    pause_topic_callback,
+    pause_topic_command,
     remove_topic,
     remove_topic_callback,
+    resume_topic_callback,
+    resume_topic_command,
     sources_command,
     src_done_callback,
     src_toggle_callback,
@@ -86,7 +90,11 @@ def create_app(settings: Settings, repo: Repository) -> Application:
     app.add_handler(MessageHandler(filters.Regex("^📰 Sources$"), sources_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(MessageHandler(filters.Regex("^📊 Stats$"), stats_command))
+    app.add_handler(CommandHandler("pause_topic", pause_topic_command))
+    app.add_handler(CommandHandler("resume_topic", resume_topic_command))
     app.add_handler(CallbackQueryHandler(remove_topic_callback, pattern=r"^remove:"))
+    app.add_handler(CallbackQueryHandler(pause_topic_callback, pattern=r"^pause:"))
+    app.add_handler(CallbackQueryHandler(resume_topic_callback, pattern=r"^resume:"))
     app.add_handler(CallbackQueryHandler(confirm_add_callback, pattern=r"^confirm_add:"))
     app.add_handler(CallbackQueryHandler(action_callback, pattern=r"^action:"))
     app.add_handler(CallbackQueryHandler(lang_toggle_callback, pattern=r"^lang_toggle:"))

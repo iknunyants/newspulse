@@ -37,6 +37,8 @@ WELCOME = (
     "/add\\_topic \\<description\\> — Add a topic to monitor\n"
     "/list\\_topics — Show your active topics\n"
     "/remove\\_topic — Remove a topic\n"
+    "/pause\\_topic — Pause a topic temporarily\n"
+    "/resume\\_topic — Resume a paused topic\n"
     "/stats — Your topic match statistics\n"
     "/languages — Choose news languages\n"
     "/sources — Choose which news sources to follow\n"
@@ -309,7 +311,7 @@ async def add_topic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def list_topics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     repo = _get_repo(context)
     user = await repo.get_or_create_user(update.effective_user.id)
-    topics = await repo.get_active_topics(user.id)
+    topics = await repo.get_active_topics(user.id, include_paused=True)
 
     add_button = InlineKeyboardMarkup([[
         InlineKeyboardButton("➕ Add Topic", callback_data="action:add_topic"),
@@ -325,7 +327,8 @@ async def list_topics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     lines = ["*Your active topics:*\n"]
     for i, t in enumerate(topics, 1):
-        lines.append(f"{i}\\. {_esc(t.topic_text)}")
+        status = " ⏸" if t.paused else ""
+        lines.append(f"{i}\\. {_esc(t.topic_text)}{status}")
     await update.message.reply_text(
         "\n".join(lines),
         parse_mode="MarkdownV2",
@@ -336,7 +339,7 @@ async def list_topics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def remove_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     repo = _get_repo(context)
     user = await repo.get_or_create_user(update.effective_user.id)
-    topics = await repo.get_active_topics(user.id)
+    topics = await repo.get_active_topics(user.id, include_paused=True)
 
     if not topics:
         await update.message.reply_text(
@@ -346,7 +349,10 @@ async def remove_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     keyboard = [
-        [InlineKeyboardButton(f"{i}. {t.topic_text[:50]}", callback_data=f"remove:{t.id}")]
+        [InlineKeyboardButton(
+            f"{i}. {t.topic_text[:50]}{'  ⏸' if t.paused else ''}",
+            callback_data=f"remove:{t.id}",
+        )]
         for i, t in enumerate(topics, 1)
     ]
     await update.message.reply_text(
@@ -376,6 +382,108 @@ async def remove_topic_callback(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         await query.edit_message_text(
             "Topic not found or already removed\\.", parse_mode="MarkdownV2"
+        )
+
+
+async def pause_topic_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Show active (non-paused) topics for pausing."""
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(update.effective_user.id)
+    topics = await repo.get_active_topics(user.id, include_paused=False)
+
+    if not topics:
+        await update.message.reply_text(
+            "You have no active topics to pause\\.",
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(
+            f"⏸ {t.topic_text[:50]}", callback_data=f"pause:{t.id}"
+        )]
+        for t in topics
+    ]
+    await update.message.reply_text(
+        "Which topic do you want to pause?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def resume_topic_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Show paused topics for resuming."""
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(update.effective_user.id)
+    paused = await repo.get_paused_topics(user.id)
+
+    if not paused:
+        await update.message.reply_text(
+            "You have no paused topics\\.",
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(
+            f"▶ {t.topic_text[:50]}", callback_data=f"resume:{t.id}"
+        )]
+        for t in paused
+    ]
+    await update.message.reply_text(
+        "Which topic do you want to resume?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def pause_topic_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    topic_id = int(query.data.split(":")[1])
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(query.from_user.id)
+
+    paused = await repo.pause_topic(topic_id, user.id)
+    if paused:
+        await query.edit_message_text(
+            "⏸ Topic paused\\. Use /resume\\_topic to resume it\\.",
+            parse_mode="MarkdownV2",
+            reply_markup=_post_action_keyboard(),
+        )
+    else:
+        await query.edit_message_text(
+            "Topic not found or already paused\\.",
+            parse_mode="MarkdownV2",
+        )
+
+
+async def resume_topic_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    topic_id = int(query.data.split(":")[1])
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(query.from_user.id)
+
+    resumed = await repo.resume_topic(topic_id, user.id)
+    if resumed:
+        await query.edit_message_text(
+            "▶ Topic resumed\\!",
+            parse_mode="MarkdownV2",
+            reply_markup=_post_action_keyboard(),
+        )
+    else:
+        await query.edit_message_text(
+            "Topic not found or not paused\\.",
+            parse_mode="MarkdownV2",
         )
 
 

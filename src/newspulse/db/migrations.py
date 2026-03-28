@@ -74,4 +74,10 @@ async def init_db(conn: aiosqlite.Connection) -> None:
         await conn.execute("ALTER TABLE users ADD COLUMN sources_json TEXT DEFAULT NULL")
     except Exception:
         pass  # Column already exists
+    try:
+        await conn.execute(
+            "ALTER TABLE topics ADD COLUMN paused INTEGER NOT NULL DEFAULT 0"
+        )
+    except Exception:
+        pass  # Column already exists
     await conn.commit()

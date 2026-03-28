@@ -179,6 +179,63 @@ async def test_get_total_articles_count(repo: Repository):
     assert await repo.get_total_articles_count() == 1
 
 
+async def test_pause_topic(repo: Repository):
+    user = await repo.get_or_create_user(100)
+    topic = await repo.add_topic(user.id, "test", ["kw"])
+    assert topic.paused is False
+
+    paused = await repo.pause_topic(topic.id, user.id)
+    assert paused is True
+
+    # Active topics (exclude paused) should be empty
+    active = await repo.get_active_topics(user.id, include_paused=False)
+    assert len(active) == 0
+
+    # Active topics (include paused) should still have it
+    all_active = await repo.get_active_topics(user.id, include_paused=True)
+    assert len(all_active) == 1
+    assert all_active[0].paused is True
+
+
+async def test_resume_topic(repo: Repository):
+    user = await repo.get_or_create_user(100)
+    topic = await repo.add_topic(user.id, "test", ["kw"])
+    await repo.pause_topic(topic.id, user.id)
+
+    resumed = await repo.resume_topic(topic.id, user.id)
+    assert resumed is True
+
+    active = await repo.get_active_topics(user.id, include_paused=False)
+    assert len(active) == 1
+    assert active[0].paused is False
+
+
+async def test_get_paused_topics(repo: Repository):
+    user = await repo.get_or_create_user(100)
+    t1 = await repo.add_topic(user.id, "topic1", ["kw1"])
+    await repo.add_topic(user.id, "topic2", ["kw2"])
+    await repo.pause_topic(t1.id, user.id)
+
+    paused = await repo.get_paused_topics(user.id)
+    assert len(paused) == 1
+    assert paused[0].topic_text == "topic1"
+
+
+async def test_pause_already_paused(repo: Repository):
+    user = await repo.get_or_create_user(100)
+    topic = await repo.add_topic(user.id, "test", ["kw"])
+    await repo.pause_topic(topic.id, user.id)
+    # Can't pause again
+    assert await repo.pause_topic(topic.id, user.id) is False
+
+
+async def test_resume_not_paused(repo: Repository):
+    user = await repo.get_or_create_user(100)
+    topic = await repo.add_topic(user.id, "test", ["kw"])
+    # Can't resume if not paused
+    assert await repo.resume_topic(topic.id, user.id) is False
+
+
 async def test_delete_old_articles(repo: Repository):
     # Insert an article, then backdate it to 60 days ago
     article, _ = await repo.upsert_article(
