@@ -20,14 +20,16 @@ from newspulse.summarize import batch_generate_summaries
 logger = logging.getLogger(__name__)
 
 
-async def _send_notification(bot: Bot, telegram_id: int, topic: Topic, article: Article) -> bool:
+async def _send_notification(
+    bot: Bot, telegram_id: int, topics: list[Topic], article: Article
+) -> bool:
     """Send a single article notification. Returns False if user blocked the bot."""
     text = format_notification(
         title=article.title,
         content=article.summary or article.content,
         source=article.source,
         url=article.url,
-        topic_text=topic.topic_text,
+        topic_texts=[t.topic_text for t in topics],
     )
     try:
         await bot.send_message(
@@ -110,8 +112,9 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
         if topic.user_id not in user_languages:
             user_languages[topic.user_id] = await repo.get_user_languages(topic.user_id)
 
-    # Group topics by user for deactivation tracking
-    user_blocked: dict[int, bool] = {}
+    # 4. Match articles to topics, accumulating per (user, article) to avoid duplicate messages
+    # pending: {(user_id, article_id): (telegram_id, article, [matching topics])}
+    pending: dict[tuple[int, int], tuple[int, Article, list[Topic]]] = {}
 
     for topic in topics:
         user_langs = user_languages.get(topic.user_id, ["en", "hy", "ru"])
@@ -150,34 +153,47 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
                     article.summary = summary
                     await repo.update_article_summary(article.id, summary)
 
+        # Get telegram_id for this user (needed for the send step)
+        async with repo._conn.execute(
+            "SELECT telegram_id FROM users WHERE id = ?", (topic.user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            continue
+        telegram_id = row["telegram_id"]
+
         for article in relevant:
-            if await repo.is_article_sent(article.id, topic.id):
-                continue
+            key = (topic.user_id, article.id)
+            if key not in pending:
+                pending[key] = (telegram_id, article, [])
+            pending[key][2].append(topic)
 
-            if user_blocked.get(topic.user_id):
-                continue
+    # 5. Send one notification per (user, article), listing all matching topics
+    user_blocked: dict[int, bool] = {}
 
-            # Get user's telegram_id
-            async with repo._conn.execute(
-                "SELECT telegram_id FROM users WHERE id = ?", (topic.user_id,)
-            ) as cur:
-                row = await cur.fetchone()
-            if not row:
-                continue
+    for (user_id, _article_id), (telegram_id, article, matched_topics) in pending.items():
+        if user_blocked.get(user_id):
+            continue
 
-            telegram_id = row["telegram_id"]
-            success = await _send_notification(bot, telegram_id, topic, article)
+        unsent_topics = [
+            t for t in matched_topics
+            if not await repo.is_article_sent(article.id, t.id)
+        ]
+        if not unsent_topics:
+            continue
 
-            if not success:
-                # User blocked the bot — deactivate all their topics
-                user_blocked[topic.user_id] = True
-                await repo._conn.execute(
-                    "UPDATE topics SET active = 0 WHERE user_id = ?", (topic.user_id,)
-                )
-                await repo._conn.commit()
-                break
+        success = await _send_notification(bot, telegram_id, unsent_topics, article)
 
-            await repo.mark_article_sent(article.id, topic.id)
+        if not success:
+            user_blocked[user_id] = True
+            await repo._conn.execute(
+                "UPDATE topics SET active = 0 WHERE user_id = ?", (user_id,)
+            )
+            await repo._conn.commit()
+            continue
+
+        for t in unsent_topics:
+            await repo.mark_article_sent(article.id, t.id)
 
 
 def setup_scheduler(repo: Repository, bot: Bot, interval_minutes: int) -> AsyncIOScheduler:

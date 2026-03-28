@@ -54,8 +54,8 @@ def validate_notification(msg: str) -> None:
     assert re.search(r"\*.+\*", msg), "message must have a bold title (*...*)"
     # Source line present
     assert re.search(r"📰 _.+_", msg), "message must have a source line (📰 _..._)"
-    # Topic line present
-    assert re.search(r"🏷 _Topic: .+_", msg), "message must have a topic line"
+    # Topic line present (singular or plural)
+    assert re.search(r"🏷 _Topics?: .+_", msg), "message must have a topic line"
     # Read article link present
     assert re.search(r"\[Read article\]\(https?://", msg), \
         "message must have a [Read article](...) link"
@@ -151,7 +151,7 @@ async def test_notification_format_from_rss(http_client: httpx.AsyncClient):
         content=article.content or article.summary,
         source=article.source,
         url=article.url,
-        topic_text="test topic",
+        topic_texts=["test topic"],
     )
     validate_notification(msg)
 
@@ -172,7 +172,7 @@ async def test_notification_format_special_characters(http_client: httpx.AsyncCl
         content=article.content,
         source=article.source,
         url=article.url,
-        topic_text="deals & offers",
+        topic_texts=["deals & offers"],
     )
     validate_notification(msg)
     # Ensure no unescaped MarkdownV2 special chars outside intended formatting

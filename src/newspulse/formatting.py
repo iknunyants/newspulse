@@ -38,7 +38,7 @@ def format_notification(
     content: str,
     source: str,
     url: str,
-    topic_text: str,
+    topic_texts: list[str],
 ) -> str:
     """Build a MarkdownV2 Telegram notification message.
 
@@ -48,7 +48,7 @@ def format_notification(
         Summary sentence one. Summary sentence two.
 
         📰 _Source_
-        🏷 _Topic: topic text_
+        🏷 _Topic: topic text_   (or Topics: a, b  when multiple match)
 
         [Read article](url)
     """
@@ -58,9 +58,11 @@ def format_notification(
     if summary:
         parts.append(escape_md(summary))
 
+    label = "Topics" if len(topic_texts) > 1 else "Topic"
+    topics_str = escape_md(", ".join(topic_texts))
     parts.append(
         f"📰 _{escape_md(source)}_\n"
-        f"🏷 _Topic: {escape_md(topic_text)}_"
+        f"🏷 _{label}: {topics_str}_"
     )
 
     parts.append(f"[Read article]({escape_url(url)})")
