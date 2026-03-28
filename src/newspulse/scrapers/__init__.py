@@ -16,3 +16,8 @@ SUPPORTED_LANGUAGES: dict[str, str] = {
     "en": "English",
     "hy": "Հայերեն",
 }
+
+
+def get_all_source_names() -> list[str]:
+    """Return all source names in definition order."""
+    return list(SOURCE_LANGUAGES.keys())

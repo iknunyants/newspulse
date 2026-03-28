@@ -7,6 +7,7 @@ class User:
     telegram_id: int
     created_at: str
     languages_json: str = '["en","hy","ru"]'
+    sources_json: str | None = None
 
 
 @dataclass

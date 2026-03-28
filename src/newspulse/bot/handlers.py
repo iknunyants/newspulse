@@ -14,7 +14,7 @@ from newspulse.config import settings
 from newspulse.db.repository import Repository
 from newspulse.formatting import escape_md as _esc
 from newspulse.matching.keywords import generate_keywords
-from newspulse.scrapers import SUPPORTED_LANGUAGES
+from newspulse.scrapers import SOURCE_LANGUAGES, SUPPORTED_LANGUAGES, get_all_source_names
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,8 @@ WAITING_FOR_TOPIC = 0
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("➕ Add Topic"), KeyboardButton("📋 My Topics")],
-        [KeyboardButton("❌ Remove Topic"), KeyboardButton("🌐 Languages")],
+        [KeyboardButton("❌ Remove Topic"), KeyboardButton("🌐 Languages"),
+         KeyboardButton("📰 Sources")],
     ],
     resize_keyboard=True,
 )
@@ -36,6 +37,8 @@ WELCOME = (
     "/add\\_topic \\<description\\> — Add a topic to monitor\n"
     "/list\\_topics — Show your active topics\n"
     "/remove\\_topic — Remove a topic\n"
+    "/languages — Choose news languages\n"
+    "/sources — Choose which news sources to follow\n"
     "/help — Show this message"
 )
 
@@ -129,6 +132,93 @@ async def lang_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     names = ", ".join(SUPPORTED_LANGUAGES[c] for c in current if c in SUPPORTED_LANGUAGES)
     await query.edit_message_text(
         f"✅ Languages set: *{_esc(names)}*",
+        parse_mode="MarkdownV2",
+    )
+
+
+def _source_keyboard(selected: list[str] | None) -> InlineKeyboardMarkup:
+    """Build the source toggle inline keyboard, grouped by language."""
+    all_sources = get_all_source_names()
+    # Group sources by language code
+    by_lang: dict[str, list[str]] = {}
+    for name in all_sources:
+        lang = SOURCE_LANGUAGES.get(name, "en")
+        by_lang.setdefault(lang, []).append(name)
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for lang_code, lang_name in SUPPORTED_LANGUAGES.items():
+        sources_in_lang = by_lang.get(lang_code, [])
+        if not sources_in_lang:
+            continue
+        # Language header row (non-interactive)
+        rows.append([InlineKeyboardButton(f"── {lang_name} ──", callback_data="src_noop")])
+        # Source toggle buttons in pairs
+        for i in range(0, len(sources_in_lang), 2):
+            pair = sources_in_lang[i:i + 2]
+            rows.append([
+                InlineKeyboardButton(
+                    f"{'✅' if (selected is None or s in selected) else '⬜'} {s}",
+                    callback_data=f"src_toggle:{s}",
+                )
+                for s in pair
+            ])
+    rows.append([InlineKeyboardButton("Done ✓", callback_data="src_done")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def sources_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the source selection keyboard."""
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(update.effective_user.id)
+    current = await repo.get_user_sources(user.id)
+    await update.message.reply_text(
+        "📰 *Choose your news sources:*\nYou'll only receive articles from selected sources\\.",
+        parse_mode="MarkdownV2",
+        reply_markup=_source_keyboard(current),
+    )
+
+
+async def src_toggle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle a source on/off."""
+    query = update.callback_query
+    await query.answer()
+
+    source_name = query.data.split(":", 1)[1]
+    all_sources = get_all_source_names()
+    if source_name not in all_sources:
+        return
+
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(query.from_user.id)
+    raw = await repo.get_user_sources(user.id)
+    current: list[str] = list(all_sources) if raw is None else list(raw)
+
+    if source_name in current:
+        if len(current) == 1:
+            await query.answer("You must keep at least one source selected.", show_alert=True)
+            return
+        current.remove(source_name)
+    else:
+        current.append(source_name)
+
+    # Store NULL if all sources are selected (backward-compatible default)
+    new_value: list[str] | None = None if set(current) == set(all_sources) else current
+    await repo.set_user_sources(user.id, new_value)
+    await query.edit_message_reply_markup(reply_markup=_source_keyboard(new_value))
+
+
+async def src_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Confirm source selection."""
+    query = update.callback_query
+    await query.answer()
+
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(query.from_user.id)
+    current = await repo.get_user_sources(user.id)
+    all_sources = get_all_source_names()
+    names = ", ".join(current) if current is not None else ", ".join(all_sources)
+    await query.edit_message_text(
+        f"✅ Sources set: *{_esc(names)}*",
         parse_mode="MarkdownV2",
     )
 

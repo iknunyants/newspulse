@@ -26,6 +26,9 @@ from newspulse.bot.handlers import (
     list_topics,
     remove_topic,
     remove_topic_callback,
+    sources_command,
+    src_done_callback,
+    src_toggle_callback,
     start,
 )
 from newspulse.config import Settings
@@ -42,7 +45,7 @@ def create_app(settings: Settings, repo: Repository) -> Application:
     app = ApplicationBuilder().token(settings.telegram_bot_token).build()
     app.bot_data["repo"] = repo
 
-    _keyboard_buttons = filters.Regex("^(📋 My Topics|❌ Remove Topic|🌐 Languages)$")
+    _keyboard_buttons = filters.Regex("^(📋 My Topics|❌ Remove Topic|🌐 Languages|📰 Sources)$")
 
     add_topic_conv = ConversationHandler(
         entry_points=[
@@ -63,6 +66,7 @@ def create_app(settings: Settings, repo: Repository) -> Application:
             MessageHandler(filters.Regex("^📋 My Topics$"), list_topics),
             MessageHandler(filters.Regex("^❌ Remove Topic$"), remove_topic),
             MessageHandler(filters.Regex("^🌐 Languages$"), languages_command),
+            MessageHandler(filters.Regex("^📰 Sources$"), sources_command),
         ],
     )
 
@@ -75,11 +79,18 @@ def create_app(settings: Settings, repo: Repository) -> Application:
     app.add_handler(CommandHandler("remove_topic", remove_topic))
     app.add_handler(CommandHandler("languages", languages_command))
     app.add_handler(MessageHandler(filters.Regex("^🌐 Languages$"), languages_command))
+    app.add_handler(CommandHandler("sources", sources_command))
+    app.add_handler(MessageHandler(filters.Regex("^📰 Sources$"), sources_command))
     app.add_handler(CallbackQueryHandler(remove_topic_callback, pattern=r"^remove:"))
     app.add_handler(CallbackQueryHandler(confirm_add_callback, pattern=r"^confirm_add:"))
     app.add_handler(CallbackQueryHandler(action_callback, pattern=r"^action:"))
     app.add_handler(CallbackQueryHandler(lang_toggle_callback, pattern=r"^lang_toggle:"))
     app.add_handler(CallbackQueryHandler(lang_done_callback, pattern=r"^lang_done$"))
+    app.add_handler(CallbackQueryHandler(src_toggle_callback, pattern=r"^src_toggle:"))
+    app.add_handler(CallbackQueryHandler(src_done_callback, pattern=r"^src_done$"))
+    app.add_handler(CallbackQueryHandler(
+        lambda u, c: u.callback_query.answer(), pattern=r"^src_noop$"
+    ))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, free_text_handler))
     app.add_error_handler(_error_handler)
 

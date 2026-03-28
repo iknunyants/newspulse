@@ -27,7 +27,8 @@ class Repository:
 
     async def get_or_create_user(self, telegram_id: int) -> User:
         async with self._conn.execute(
-            "SELECT id, telegram_id, created_at, languages_json FROM users WHERE telegram_id = ?",
+            "SELECT id, telegram_id, created_at, languages_json, sources_json"
+            " FROM users WHERE telegram_id = ?",
             (telegram_id,),
         ) as cur:
             row = await cur.fetchone()
@@ -38,7 +39,8 @@ class Repository:
         )
         await self._conn.commit()
         async with self._conn.execute(
-            "SELECT id, telegram_id, created_at, languages_json FROM users WHERE telegram_id = ?",
+            "SELECT id, telegram_id, created_at, languages_json, sources_json"
+            " FROM users WHERE telegram_id = ?",
             (telegram_id,),
         ) as cur:
             row = await cur.fetchone()
@@ -59,6 +61,23 @@ class Repository:
         if not row:
             return ["en", "hy", "ru"]
         return json.loads(row["languages_json"])
+
+    async def set_user_sources(self, user_id: int, sources: list[str] | None) -> None:
+        value = None if sources is None else json.dumps(sources, ensure_ascii=False)
+        await self._conn.execute(
+            "UPDATE users SET sources_json = ? WHERE id = ?",
+            (value, user_id),
+        )
+        await self._conn.commit()
+
+    async def get_user_sources(self, user_id: int) -> list[str] | None:
+        async with self._conn.execute(
+            "SELECT sources_json FROM users WHERE id = ?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if not row or row["sources_json"] is None:
+            return None  # None means all sources
+        return json.loads(row["sources_json"])
 
     # --- Topics ---
 

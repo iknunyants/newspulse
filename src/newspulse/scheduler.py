@@ -106,11 +106,14 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
     if not topics:
         return
 
-    # Build per-user language preferences (fetched once per user)
+    # Build per-user language and source preferences (fetched once per user)
     user_languages: dict[int, list[str]] = {}
+    user_sources: dict[int, list[str] | None] = {}
     for topic in topics:
         if topic.user_id not in user_languages:
             user_languages[topic.user_id] = await repo.get_user_languages(topic.user_id)
+        if topic.user_id not in user_sources:
+            user_sources[topic.user_id] = await repo.get_user_sources(topic.user_id)
 
     # 4. Match articles to topics, accumulating per (user, article) to avoid duplicate messages
     # pending: {(user_id, article_id): (telegram_id, article, [matching topics])}
@@ -122,6 +125,10 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
             a for a in new_articles
             if SOURCE_LANGUAGES.get(a.source, "en") in user_langs
         ]
+        user_srcs = user_sources.get(topic.user_id)
+        if user_srcs is not None:
+            allowed = set(user_srcs)
+            lang_filtered = [a for a in lang_filtered if a.source in allowed]
         keywords = json.loads(topic.keywords_json)
         candidates_scraped = [
             a for a in lang_filtered
