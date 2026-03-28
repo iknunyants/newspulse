@@ -30,6 +30,7 @@ from newspulse.bot.handlers import (
     src_done_callback,
     src_toggle_callback,
     start,
+    stats_command,
 )
 from newspulse.config import Settings
 from newspulse.db.repository import Repository
@@ -45,7 +46,9 @@ def create_app(settings: Settings, repo: Repository) -> Application:
     app = ApplicationBuilder().token(settings.telegram_bot_token).build()
     app.bot_data["repo"] = repo
 
-    _keyboard_buttons = filters.Regex("^(📋 My Topics|❌ Remove Topic|🌐 Languages|📰 Sources)$")
+    _keyboard_buttons = filters.Regex(
+        "^(📋 My Topics|❌ Remove Topic|🌐 Languages|📰 Sources|📊 Stats)$"
+    )
 
     add_topic_conv = ConversationHandler(
         entry_points=[
@@ -81,6 +84,8 @@ def create_app(settings: Settings, repo: Repository) -> Application:
     app.add_handler(MessageHandler(filters.Regex("^🌐 Languages$"), languages_command))
     app.add_handler(CommandHandler("sources", sources_command))
     app.add_handler(MessageHandler(filters.Regex("^📰 Sources$"), sources_command))
+    app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(MessageHandler(filters.Regex("^📊 Stats$"), stats_command))
     app.add_handler(CallbackQueryHandler(remove_topic_callback, pattern=r"^remove:"))
     app.add_handler(CallbackQueryHandler(confirm_add_callback, pattern=r"^confirm_add:"))
     app.add_handler(CallbackQueryHandler(action_callback, pattern=r"^action:"))

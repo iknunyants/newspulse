@@ -148,3 +148,32 @@ async def test_scrape_log(repo: Repository):
     assert await repo.get_last_scrape_time("BBC World") is None
     await repo.update_scrape_time("BBC World")
     assert await repo.get_last_scrape_time("BBC World") is not None
+
+
+async def test_get_user_stats_empty(repo: Repository):
+    user = await repo.get_or_create_user(100)
+    stats = await repo.get_user_stats(user.id)
+    assert stats == []
+
+
+async def test_get_user_stats_with_data(repo: Repository):
+    user = await repo.get_or_create_user(100)
+    topic = await repo.add_topic(user.id, "test topic", ["kw"])
+    article, _ = await repo.upsert_article(
+        source="Test", title="T", url="https://example.com/1",
+        summary="S", published_at=None,
+    )
+    await repo.mark_article_sent(article.id, topic.id)
+
+    stats = await repo.get_user_stats(user.id)
+    assert len(stats) == 1
+    assert stats[0] == ("test topic", 1)
+
+
+async def test_get_total_articles_count(repo: Repository):
+    assert await repo.get_total_articles_count() == 0
+    await repo.upsert_article(
+        source="Test", title="T", url="https://example.com/1",
+        summary="S", published_at=None,
+    )
+    assert await repo.get_total_articles_count() == 1

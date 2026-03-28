@@ -24,8 +24,8 @@ WAITING_FOR_TOPIC = 0
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("➕ Add Topic"), KeyboardButton("📋 My Topics")],
-        [KeyboardButton("❌ Remove Topic"), KeyboardButton("🌐 Languages"),
-         KeyboardButton("📰 Sources")],
+        [KeyboardButton("❌ Remove Topic"), KeyboardButton("📊 Stats")],
+        [KeyboardButton("🌐 Languages"), KeyboardButton("📰 Sources")],
     ],
     resize_keyboard=True,
 )
@@ -37,6 +37,7 @@ WELCOME = (
     "/add\\_topic \\<description\\> — Add a topic to monitor\n"
     "/list\\_topics — Show your active topics\n"
     "/remove\\_topic — Remove a topic\n"
+    "/stats — Your topic match statistics\n"
     "/languages — Choose news languages\n"
     "/sources — Choose which news sources to follow\n"
     "/help — Show this message"
@@ -456,4 +457,34 @@ async def action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     elif query.data == "action:add_topic":
         context.user_data["awaiting_topic"] = True
-        await context.bot.send_message(chat_id, "What topic would you like to monitor?")
+        await context.bot.send_message(
+            chat_id, "What topic would you like to monitor?"
+        )
+
+
+async def stats_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Show per-topic match statistics for the last 7 days."""
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(update.effective_user.id)
+
+    topic_stats = await repo.get_user_stats(user.id, days=7)
+    total = await repo.get_total_articles_count(days=7)
+
+    if not topic_stats:
+        await update.message.reply_text(
+            "You have no active topics\\. Use /add\\_topic to add one\\.",
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    lines = ["*📊 Your stats \\(last 7 days\\):*\n"]
+    for topic_text, count in topic_stats:
+        lines.append(f"• {_esc(topic_text)}: *{count}* match{'es' if count != 1 else ''}")
+    lines.append(f"\n📰 Total articles scraped: *{total}*")
+
+    await update.message.reply_text(
+        "\n".join(lines),
+        parse_mode="MarkdownV2",
+    )

@@ -248,3 +248,34 @@ class Repository:
             (source,),
         )
         await self._conn.commit()
+
+    # --- Stats ---
+
+    async def get_user_stats(
+        self, user_id: int, days: int = 7
+    ) -> list[tuple[str, int]]:
+        """Get per-topic article match counts for a user over the last N days.
+
+        Returns list of (topic_text, count) for active topics.
+        """
+        async with self._conn.execute(
+            "SELECT t.topic_text, COUNT(sa.id) as cnt "
+            "FROM topics t "
+            "LEFT JOIN sent_articles sa ON sa.topic_id = t.id "
+            "  AND sa.sent_at >= datetime('now', ? || ' days') "
+            "WHERE t.user_id = ? AND t.active = 1 "
+            "GROUP BY t.id ORDER BY cnt DESC",
+            (f"-{days}", user_id),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [(r["topic_text"], r["cnt"]) for r in rows]
+
+    async def get_total_articles_count(self, days: int = 7) -> int:
+        """Total articles scraped in the last N days."""
+        async with self._conn.execute(
+            "SELECT COUNT(*) FROM articles "
+            "WHERE created_at >= datetime('now', ? || ' days')",
+            (f"-{days}",),
+        ) as cur:
+            row = await cur.fetchone()
+        return row[0]
