@@ -5,7 +5,7 @@ import logging
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from telegram import Bot
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import Forbidden, TelegramError
 
 from newspulse.db.models import Article, Topic
@@ -31,12 +31,17 @@ async def _send_notification(
         url=article.url,
         topic_texts=[t.topic_text for t in topics],
     )
+    feedback_kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("👍", callback_data=f"fb:1:{article.id}"),
+        InlineKeyboardButton("👎", callback_data=f"fb:0:{article.id}"),
+    ]])
     try:
         await bot.send_message(
             chat_id=telegram_id,
             text=text,
             parse_mode="MarkdownV2",
             disable_web_page_preview=False,
+            reply_markup=feedback_kb,
         )
         return True
     except Forbidden:

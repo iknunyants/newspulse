@@ -236,6 +236,39 @@ async def test_resume_not_paused(repo: Repository):
     assert await repo.resume_topic(topic.id, user.id) is False
 
 
+async def test_save_feedback(repo: Repository):
+    user = await repo.get_or_create_user(100)
+    article, _ = await repo.upsert_article(
+        source="Test", title="T", url="https://example.com/1",
+        summary="S", published_at=None,
+    )
+    await repo.save_feedback(user.id, article.id, relevant=True)
+    pos, neg = await repo.get_feedback_stats(user.id)
+    assert pos == 1
+    assert neg == 0
+
+
+async def test_save_feedback_update(repo: Repository):
+    """Updating feedback replaces the old value."""
+    user = await repo.get_or_create_user(100)
+    article, _ = await repo.upsert_article(
+        source="Test", title="T", url="https://example.com/1",
+        summary="S", published_at=None,
+    )
+    await repo.save_feedback(user.id, article.id, relevant=True)
+    await repo.save_feedback(user.id, article.id, relevant=False)
+    pos, neg = await repo.get_feedback_stats(user.id)
+    assert pos == 0
+    assert neg == 1
+
+
+async def test_feedback_stats_empty(repo: Repository):
+    user = await repo.get_or_create_user(100)
+    pos, neg = await repo.get_feedback_stats(user.id)
+    assert pos == 0
+    assert neg == 0
+
+
 async def test_delete_old_articles(repo: Repository):
     # Insert an article, then backdate it to 60 days ago
     article, _ = await repo.upsert_article(

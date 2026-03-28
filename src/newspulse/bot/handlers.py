@@ -487,6 +487,30 @@ async def resume_topic_callback(
         )
 
 
+async def feedback_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle article feedback (thumbs up/down)."""
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split(":")
+    relevant = parts[1] == "1"
+    article_id = int(parts[2])
+
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(query.from_user.id)
+    await repo.save_feedback(user.id, article_id, relevant)
+
+    label = "👍 Relevant" if relevant else "👎 Not relevant"
+    # Remove the feedback buttons and append the feedback label
+    original_text = query.message.text_markdown_v2
+    await query.edit_message_text(
+        f"{original_text}\n\n_{_esc(label)}_",
+        parse_mode="MarkdownV2",
+    )
+
+
 async def free_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text.strip()
     if not text:

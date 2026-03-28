@@ -329,6 +329,36 @@ class Repository:
             row = await cur.fetchone()
         return row[0]
 
+    # --- Feedback ---
+
+    async def save_feedback(
+        self, user_id: int, article_id: int, relevant: bool
+    ) -> None:
+        """Save user feedback on an article's relevance."""
+        await self._conn.execute(
+            "INSERT INTO article_feedback (user_id, article_id, relevant) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, article_id) DO UPDATE SET relevant = ?",
+            (user_id, article_id, int(relevant), int(relevant)),
+        )
+        await self._conn.commit()
+
+    async def get_feedback_stats(
+        self, user_id: int
+    ) -> tuple[int, int]:
+        """Get (positive, negative) feedback counts for a user."""
+        async with self._conn.execute(
+            "SELECT "
+            "  SUM(CASE WHEN relevant = 1 THEN 1 ELSE 0 END) as pos, "
+            "  SUM(CASE WHEN relevant = 0 THEN 1 ELSE 0 END) as neg "
+            "FROM article_feedback WHERE user_id = ?",
+            (user_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        return (row["pos"] or 0, row["neg"] or 0)
+
+    # --- Cleanup ---
+
     async def delete_old_articles(self, days: int = 30) -> int:
         """Delete articles older than N days and their sent_articles records.
 

@@ -18,6 +18,7 @@ from newspulse.bot.handlers import (
     add_topic_entry,
     add_topic_receive,
     confirm_add_callback,
+    feedback_callback,
     free_text_handler,
     help_command,
     lang_done_callback,
@@ -92,6 +93,7 @@ def create_app(settings: Settings, repo: Repository) -> Application:
     app.add_handler(MessageHandler(filters.Regex("^📊 Stats$"), stats_command))
     app.add_handler(CommandHandler("pause_topic", pause_topic_command))
     app.add_handler(CommandHandler("resume_topic", resume_topic_command))
+    app.add_handler(CallbackQueryHandler(feedback_callback, pattern=r"^fb:"))
     app.add_handler(CallbackQueryHandler(remove_topic_callback, pattern=r"^remove:"))
     app.add_handler(CallbackQueryHandler(pause_topic_callback, pattern=r"^pause:"))
     app.add_handler(CallbackQueryHandler(resume_topic_callback, pattern=r"^resume:"))

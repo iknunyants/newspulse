@@ -80,4 +80,14 @@ async def init_db(conn: aiosqlite.Connection) -> None:
         )
     except Exception:
         pass  # Column already exists
+    await conn.execute(
+        "CREATE TABLE IF NOT EXISTS article_feedback ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  user_id INTEGER NOT NULL REFERENCES users(id),"
+        "  article_id INTEGER NOT NULL REFERENCES articles(id),"
+        "  relevant INTEGER NOT NULL,"
+        "  created_at TEXT NOT NULL DEFAULT (datetime('now')),"
+        "  UNIQUE(user_id, article_id)"
+        ")"
+    )
     await conn.commit()
