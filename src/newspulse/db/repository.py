@@ -279,3 +279,24 @@ class Repository:
         ) as cur:
             row = await cur.fetchone()
         return row[0]
+
+    async def delete_old_articles(self, days: int = 30) -> int:
+        """Delete articles older than N days and their sent_articles records.
+
+        Returns number of articles deleted.
+        """
+        # Delete sent_articles referencing old articles first
+        await self._conn.execute(
+            "DELETE FROM sent_articles WHERE article_id IN ("
+            "  SELECT id FROM articles "
+            "  WHERE created_at < datetime('now', ? || ' days')"
+            ")",
+            (f"-{days}",),
+        )
+        result = await self._conn.execute(
+            "DELETE FROM articles "
+            "WHERE created_at < datetime('now', ? || ' days')",
+            (f"-{days}",),
+        )
+        await self._conn.commit()
+        return result.rowcount

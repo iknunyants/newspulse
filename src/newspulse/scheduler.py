@@ -195,6 +195,11 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
         for t in unsent_topics:
             await repo.mark_article_sent(article.id, t.id)
 
+    # 6. Clean up old articles (older than 30 days)
+    deleted = await repo.delete_old_articles(days=30)
+    if deleted:
+        logger.info("Cleaned up %d old articles.", deleted)
+
 
 def setup_scheduler(repo: Repository, bot: Bot, interval_minutes: int) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()

@@ -177,3 +177,49 @@ async def test_get_total_articles_count(repo: Repository):
         summary="S", published_at=None,
     )
     assert await repo.get_total_articles_count() == 1
+
+
+async def test_delete_old_articles(repo: Repository):
+    # Insert an article, then backdate it to 60 days ago
+    article, _ = await repo.upsert_article(
+        source="Test", title="Old", url="https://example.com/old",
+        summary="S", published_at=None,
+    )
+    await repo._conn.execute(
+        "UPDATE articles SET created_at = datetime('now', '-60 days') "
+        "WHERE id = ?", (article.id,),
+    )
+    await repo._conn.commit()
+
+    # Insert a recent article
+    await repo.upsert_article(
+        source="Test", title="New", url="https://example.com/new",
+        summary="S", published_at=None,
+    )
+
+    deleted = await repo.delete_old_articles(days=30)
+    assert deleted == 1
+    assert await repo.get_total_articles_count(days=90) == 1
+
+
+async def test_delete_old_articles_cascades_sent(repo: Repository):
+    """Deleting old articles should also clean up sent_articles."""
+    user = await repo.get_or_create_user(100)
+    topic = await repo.add_topic(user.id, "test", ["kw"])
+    article, _ = await repo.upsert_article(
+        source="Test", title="Old", url="https://example.com/old",
+        summary="S", published_at=None,
+    )
+    await repo.mark_article_sent(article.id, topic.id)
+
+    # Backdate the article
+    await repo._conn.execute(
+        "UPDATE articles SET created_at = datetime('now', '-60 days') "
+        "WHERE id = ?", (article.id,),
+    )
+    await repo._conn.commit()
+
+    deleted = await repo.delete_old_articles(days=30)
+    assert deleted == 1
+    # sent_articles record should also be gone
+    assert await repo.is_article_sent(article.id, topic.id) is False
