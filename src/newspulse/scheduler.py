@@ -120,7 +120,7 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
     pending: dict[tuple[int, int], tuple[int, Article, list[Topic]]] = {}
 
     for topic in topics:
-        user_langs = user_languages.get(topic.user_id, ["en", "hy", "ru"])
+        user_langs = user_languages.get(topic.user_id, ["en", "hy"])
         lang_filtered = [
             a for a in new_articles
             if SOURCE_LANGUAGES.get(a.source, "en") in user_langs
@@ -161,13 +161,9 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
                     await repo.update_article_summary(article.id, summary)
 
         # Get telegram_id for this user (needed for the send step)
-        async with repo._conn.execute(
-            "SELECT telegram_id FROM users WHERE id = ?", (topic.user_id,)
-        ) as cur:
-            row = await cur.fetchone()
-        if not row:
+        telegram_id = await repo.get_telegram_id(topic.user_id)
+        if not telegram_id:
             continue
-        telegram_id = row["telegram_id"]
 
         for article in relevant:
             key = (topic.user_id, article.id)
@@ -193,10 +189,7 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
 
         if not success:
             user_blocked[user_id] = True
-            await repo._conn.execute(
-                "UPDATE topics SET active = 0 WHERE user_id = ?", (user_id,)
-            )
-            await repo._conn.commit()
+            await repo.deactivate_all_topics(user_id)
             continue
 
         for t in unsent_topics:

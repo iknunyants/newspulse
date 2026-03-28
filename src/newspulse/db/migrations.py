@@ -64,7 +64,7 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     except Exception:
         pass  # Column already exists
     try:
-        default = '["en","hy","ru"]'
+        default = '["en","hy"]'
         await conn.execute(
             f"ALTER TABLE users ADD COLUMN languages_json TEXT NOT NULL DEFAULT '{default}'"
         )

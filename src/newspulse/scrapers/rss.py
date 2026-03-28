@@ -25,39 +25,50 @@ class RssScraper(BaseScraper):
     def __init__(self, feeds: list[tuple[str, str]] = RSS_FEEDS) -> None:
         self._feeds = feeds
 
+    async def _scrape_feed(
+        self, client: httpx.AsyncClient, source_name: str, feed_url: str
+    ) -> list[ScrapedArticle]:
+        """Scrape a single RSS feed."""
+        articles: list[ScrapedArticle] = []
+        resp = await client.get(feed_url, headers=HEADERS, timeout=20)
+        resp.raise_for_status()
+        feed = feedparser.parse(resp.text)
+        for entry in feed.entries:
+            title = entry.get("title", "").strip()
+            url = entry.get("link", "").strip()
+            if not title or not url:
+                continue
+            summary = (entry.get("summary", "") or entry.get("description", "")).strip()
+            if "<" in summary:
+                from bs4 import BeautifulSoup
+
+                summary = BeautifulSoup(summary, "lxml").get_text(separator=" ", strip=True)
+            published_at = None
+            if hasattr(entry, "published"):
+                published_at = entry.published
+            articles.append(
+                ScrapedArticle(
+                    source=source_name,
+                    title=title,
+                    url=url,
+                    summary=summary[:500],
+                    published_at=published_at,
+                    content=summary,
+                )
+            )
+        return articles
+
     async def scrape(self, client: httpx.AsyncClient) -> list[ScrapedArticle]:
         articles: list[ScrapedArticle] = []
-        for source_name, feed_url in self._feeds:
-            try:
-                resp = await client.get(feed_url, headers=HEADERS, timeout=20)
-                resp.raise_for_status()
-                feed = feedparser.parse(resp.text)
-                for entry in feed.entries:
-                    title = entry.get("title", "").strip()
-                    url = entry.get("link", "").strip()
-                    if not title or not url:
-                        continue
-                    summary = (entry.get("summary", "") or entry.get("description", "")).strip()
-                    # Strip HTML tags from summary if present
-                    if "<" in summary:
-                        from bs4 import BeautifulSoup
-
-                        summary = BeautifulSoup(summary, "lxml").get_text(separator=" ", strip=True)
-                    published_at = None
-                    if hasattr(entry, "published"):
-                        published_at = entry.published
-                    articles.append(
-                        ScrapedArticle(
-                            source=source_name,
-                            title=title,
-                            url=url,
-                            summary=summary[:500],
-                            published_at=published_at,
-                            content=summary,
-                        )
-                    )
-            except Exception as e:
-                logger.error("RSS feed %s failed: %s", feed_url, e)
+        results = await asyncio.gather(
+            *[self._scrape_feed(client, name, url) for name, url in self._feeds],
+            return_exceptions=True,
+        )
+        for (_, feed_url), result in zip(self._feeds, results):
+            if isinstance(result, Exception):
+                logger.error("RSS feed %s failed: %s", feed_url, result)
+                continue
+            articles.extend(result)
 
         # Fetch full article content for articles with no/short summary (title-only feeds)
         needs_content = [(i, a) for i, a in enumerate(articles) if len(a.summary) < 50]

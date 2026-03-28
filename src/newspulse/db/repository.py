@@ -59,7 +59,7 @@ class Repository:
         ) as cur:
             row = await cur.fetchone()
         if not row:
-            return ["en", "hy", "ru"]
+            return ["en", "hy"]
         return json.loads(row["languages_json"])
 
     async def set_user_sources(self, user_id: int, sources: list[str] | None) -> None:
@@ -145,6 +145,32 @@ class Repository:
         )
         await self._conn.commit()
         return result.rowcount > 0
+
+    async def reactivate_topics(self, user_id: int) -> int:
+        """Reactivate all topics for a user. Returns number reactivated."""
+        result = await self._conn.execute(
+            "UPDATE topics SET active = 1 WHERE user_id = ? AND active = 0",
+            (user_id,),
+        )
+        await self._conn.commit()
+        return result.rowcount
+
+    async def deactivate_all_topics(self, user_id: int) -> int:
+        """Deactivate all topics for a user. Returns number deactivated."""
+        result = await self._conn.execute(
+            "UPDATE topics SET active = 0 WHERE user_id = ?",
+            (user_id,),
+        )
+        await self._conn.commit()
+        return result.rowcount
+
+    async def get_telegram_id(self, user_id: int) -> int | None:
+        """Get telegram_id for an internal user ID."""
+        async with self._conn.execute(
+            "SELECT telegram_id FROM users WHERE id = ?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return row["telegram_id"] if row else None
 
     # --- Articles ---
 

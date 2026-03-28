@@ -74,6 +74,16 @@ def _language_keyboard(selected: list[str]) -> InlineKeyboardMarkup:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     repo = _get_repo(context)
     user = await repo.get_or_create_user(update.effective_user.id)
+
+    # Reactivate topics if user previously blocked the bot
+    reactivated = await repo.reactivate_topics(user.id)
+    if reactivated:
+        await update.message.reply_text(
+            f"🔄 Welcome back\\! Reactivated {reactivated} "
+            f"topic{'s' if reactivated > 1 else ''}\\.",
+            parse_mode="MarkdownV2",
+        )
+
     await update.message.reply_text(WELCOME, parse_mode="MarkdownV2", reply_markup=MAIN_KEYBOARD)
 
     current = json.loads(user.languages_json)
