@@ -80,6 +80,20 @@ async def init_db(conn: aiosqlite.Connection) -> None:
         )
     except Exception:
         pass  # Column already exists
+    # Performance indexes
+    for idx_sql in [
+        "CREATE INDEX IF NOT EXISTS idx_topics_user_active "
+        "ON topics(user_id, active)",
+        "CREATE INDEX IF NOT EXISTS idx_articles_source "
+        "ON articles(source)",
+        "CREATE INDEX IF NOT EXISTS idx_articles_created "
+        "ON articles(created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_sent_articles_article "
+        "ON sent_articles(article_id)",
+        "CREATE INDEX IF NOT EXISTS idx_sent_articles_topic "
+        "ON sent_articles(topic_id)",
+    ]:
+        await conn.execute(idx_sql)
     await conn.execute(
         "CREATE TABLE IF NOT EXISTS article_feedback ("
         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
