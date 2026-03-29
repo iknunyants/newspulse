@@ -80,12 +80,6 @@ async def init_db(conn: aiosqlite.Connection) -> None:
         )
     except Exception:
         pass  # Column already exists
-    try:
-        await conn.execute(
-            "ALTER TABLE topics ADD COLUMN keywords_updated_at TEXT DEFAULT NULL"
-        )
-    except Exception:
-        pass  # Column already exists
     # Performance indexes
     for idx_sql in [
         "CREATE INDEX IF NOT EXISTS idx_topics_user_active "

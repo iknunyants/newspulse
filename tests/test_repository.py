@@ -373,61 +373,6 @@ async def test_get_user_by_id_not_found(repo: Repository):
     assert result is None
 
 
-async def test_get_stale_topics_fresh(repo: Repository):
-    """Newly created topics (keywords_updated_at IS NULL) are considered stale."""
-    user = await repo.get_or_create_user(100)
-    await repo.add_topic(user.id, "new topic", ["kw"])
-    stale = await repo.get_stale_topics(days=7)
-    assert len(stale) == 1
-    assert stale[0].topic_text == "new topic"
-
-
-async def test_get_stale_topics_after_refresh(repo: Repository):
-    """Topics refreshed recently are not stale."""
-    user = await repo.get_or_create_user(100)
-    topic = await repo.add_topic(user.id, "topic", ["kw"])
-    await repo.update_topic_keywords(topic.id, ["new_kw"])
-
-    stale = await repo.get_stale_topics(days=7)
-    assert len(stale) == 0
-
-
-async def test_get_stale_topics_old_refresh(repo: Repository):
-    """Topics refreshed more than N days ago are stale."""
-    user = await repo.get_or_create_user(100)
-    topic = await repo.add_topic(user.id, "old topic", ["kw"])
-    # Backdate the keywords_updated_at to 10 days ago
-    await repo._conn.execute(
-        "UPDATE topics SET keywords_updated_at = datetime('now', '-10 days') "
-        "WHERE id = ?", (topic.id,),
-    )
-    await repo._conn.commit()
-
-    stale = await repo.get_stale_topics(days=7)
-    assert len(stale) == 1
-
-
-async def test_update_topic_keywords(repo: Repository):
-    user = await repo.get_or_create_user(100)
-    topic = await repo.add_topic(user.id, "topic", ["old_kw"])
-    await repo.update_topic_keywords(topic.id, ["new_kw1", "new_kw2"])
-
-    updated = await repo.get_active_topics(user.id)
-    import json
-    kws = json.loads(updated[0].keywords_json)
-    assert kws == ["new_kw1", "new_kw2"]
-    assert updated[0].keywords_updated_at is not None
-
-
-async def test_get_stale_topics_limit(repo: Repository):
-    """get_stale_topics respects the limit parameter."""
-    user = await repo.get_or_create_user(100)
-    for i in range(5):
-        await repo.add_topic(user.id, f"topic {i}", ["kw"])
-    stale = await repo.get_stale_topics(days=7, limit=3)
-    assert len(stale) == 3
-
-
 async def test_delete_old_articles(repo: Repository):
     # Insert an article, then backdate it to 60 days ago
     article, _ = await repo.upsert_article(

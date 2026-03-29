@@ -21,7 +21,6 @@ class Topic:
     active: bool
     created_at: str
     paused: bool = False
-    keywords_updated_at: str | None = None
 
 
 @dataclass
