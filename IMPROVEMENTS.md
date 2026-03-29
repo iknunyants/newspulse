@@ -25,8 +25,8 @@
 | B4 | Fix Repository Abstraction Leaks | ✅ Done |
 | B5 | Remove Phantom Russian Language | ✅ Done |
 | B6 | Add Database Indexes | ✅ Done |
-| B7 | Batch DB Commits | ✅ Done |
-| B8 | Keyword Refresh | ✅ Done |
+| B7 | Batch DB Commits | ☐ Pending |
+| B8 | Keyword Refresh | ☐ Pending |
 
 ### C. Observability & Reliability
 
@@ -43,7 +43,7 @@
 | D1 | Unit Tests for Core Logic | ✅ Done |
 | D2 | Scheduler Pipeline Test | ☐ Pending |
 
-**14 done, 6 pending.**
+**12 done, 8 pending.**
 
 ---
 
@@ -79,9 +79,9 @@
 
 - [x] **B6. Add Database Indexes** — Added indexes on `topics(user_id, active)`, `articles(source)`, `articles(created_at)`, and `sent_articles(article_id/topic_id)` for query performance at scale.
 
-- [x] **B7. Batch DB Commits** — Wrap the article-storage and notification-send phases in explicit transactions instead of committing after each individual insert. Reduces I/O overhead during scrape cycles.
+- [ ] **B7. Batch DB Commits** — Wrap the article-storage and notification-send phases in explicit transactions instead of committing after each individual insert. Reduces I/O overhead during scrape cycles.
 
-- [x] **B8. Keyword Refresh** — Periodically regenerate keywords for long-lived topics so they stay current with evolving events. Could also trigger on negative feedback from A3.
+- [ ] **B8. Keyword Refresh** — Periodically regenerate keywords for long-lived topics so they stay current with evolving events. Could also trigger on negative feedback from A3.
 
 ## C. Observability & Reliability
 
