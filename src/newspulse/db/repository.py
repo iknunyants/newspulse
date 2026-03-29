@@ -121,20 +121,12 @@ class Repository:
 
     # --- Topics ---
 
-    async def add_topic(self, user_id: int, topic_text: str, keywords: list[str]) -> Topic:
-        keywords_json = json.dumps(keywords, ensure_ascii=False)
-        await self._conn.execute(
-            "INSERT INTO topics (user_id, topic_text, keywords_json) VALUES (?, ?, ?)",
-            (user_id, topic_text, keywords_json),
-        )
-        await self._commit()
-        async with self._conn.execute(
-            "SELECT id, user_id, topic_text, keywords_json, active, "
-            "created_at, paused "
-            "FROM topics WHERE user_id = ? ORDER BY id DESC LIMIT 1",
-            (user_id,),
-        ) as cur:
-            row = await cur.fetchone()
+    _TOPIC_COLS = (
+        "id, user_id, topic_text, keywords_json, active, "
+        "created_at, paused, keywords_updated_at"
+    )
+
+    def _row_to_topic(self, row: aiosqlite.Row) -> Topic:
         return Topic(
             id=row["id"],
             user_id=row["user_id"],
@@ -143,7 +135,23 @@ class Repository:
             active=bool(row["active"]),
             created_at=row["created_at"],
             paused=bool(row["paused"]),
+            keywords_updated_at=row["keywords_updated_at"],
         )
+
+    async def add_topic(self, user_id: int, topic_text: str, keywords: list[str]) -> Topic:
+        keywords_json = json.dumps(keywords, ensure_ascii=False)
+        await self._conn.execute(
+            "INSERT INTO topics (user_id, topic_text, keywords_json) VALUES (?, ?, ?)",
+            (user_id, topic_text, keywords_json),
+        )
+        await self._commit()
+        async with self._conn.execute(
+            f"SELECT {self._TOPIC_COLS} "
+            "FROM topics WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        return self._row_to_topic(row)
 
     async def count_active_topics(self, user_id: int) -> int:
         async with self._conn.execute(
@@ -159,33 +167,20 @@ class Repository:
         paused_filter = "" if include_paused else " AND paused = 0"
         if user_id is not None:
             query = (
-                "SELECT id, user_id, topic_text, keywords_json, active, "
-                "created_at, paused "
+                f"SELECT {self._TOPIC_COLS} "
                 f"FROM topics WHERE user_id = ? AND active = 1{paused_filter}"
                 " ORDER BY id"
             )
             params = (user_id,)
         else:
             query = (
-                "SELECT id, user_id, topic_text, keywords_json, active, "
-                "created_at, paused "
+                f"SELECT {self._TOPIC_COLS} "
                 f"FROM topics WHERE active = 1{paused_filter} ORDER BY id"
             )
             params = ()
         async with self._conn.execute(query, params) as cur:
             rows = await cur.fetchall()
-        return [
-            Topic(
-                id=r["id"],
-                user_id=r["user_id"],
-                topic_text=r["topic_text"],
-                keywords_json=r["keywords_json"],
-                active=bool(r["active"]),
-                created_at=r["created_at"],
-                paused=bool(r["paused"]),
-            )
-            for r in rows
-        ]
+        return [self._row_to_topic(r) for r in rows]
 
     async def deactivate_topic(self, topic_id: int, user_id: int) -> bool:
         result = await self._conn.execute(
@@ -227,22 +222,43 @@ class Repository:
     async def get_paused_topics(self, user_id: int) -> list[Topic]:
         """Get all paused (but active) topics for a user."""
         async with self._conn.execute(
-            "SELECT id, user_id, topic_text, keywords_json, active, created_at "
+            f"SELECT {self._TOPIC_COLS} "
             "FROM topics WHERE user_id = ? AND active = 1 AND paused = 1 "
             "ORDER BY id",
             (user_id,),
         ) as cur:
             rows = await cur.fetchall()
-        return [
-            Topic(
-                id=r["id"], user_id=r["user_id"],
-                topic_text=r["topic_text"],
-                keywords_json=r["keywords_json"],
-                active=bool(r["active"]),
-                created_at=r["created_at"],
-            )
-            for r in rows
-        ]
+        return [self._row_to_topic(r) for r in rows]
+
+    async def get_stale_topics(self, days: int = 7, limit: int = 20) -> list[Topic]:
+        """Return active topics whose keywords haven't been refreshed in `days` days.
+
+        Topics where keywords_updated_at IS NULL are treated as never refreshed
+        and are always included.
+        """
+        async with self._conn.execute(
+            f"SELECT {self._TOPIC_COLS} FROM topics "
+            "WHERE active = 1 AND paused = 0 AND ("
+            "  keywords_updated_at IS NULL OR "
+            "  keywords_updated_at < datetime('now', ? || ' days')"
+            ") ORDER BY keywords_updated_at ASC NULLS FIRST "
+            "LIMIT ?",
+            (f"-{days}", limit),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [self._row_to_topic(r) for r in rows]
+
+    async def update_topic_keywords(
+        self, topic_id: int, keywords: list[str]
+    ) -> None:
+        """Update keywords and set keywords_updated_at to now."""
+        await self._conn.execute(
+            "UPDATE topics SET keywords_json = ?, "
+            "keywords_updated_at = datetime('now') "
+            "WHERE id = ?",
+            (json.dumps(keywords, ensure_ascii=False), topic_id),
+        )
+        await self._commit()
 
     async def deactivate_all_topics(self, user_id: int) -> int:
         """Deactivate all topics for a user. Returns number deactivated."""
@@ -446,7 +462,8 @@ class Repository:
             "SELECT a.id, a.url_hash, a.source, a.title, a.url, a.summary, "
             "  a.published_at, a.created_at, a.content, "
             "  t.id as t_id, t.user_id as t_user_id, t.topic_text, "
-            "  t.keywords_json, t.active, t.created_at as t_created, t.paused "
+            "  t.keywords_json, t.active, t.created_at as t_created, "
+            "  t.paused, t.keywords_updated_at "
             "FROM digest_queue dq "
             "JOIN articles a ON a.id = dq.article_id "
             "JOIN topics t ON t.id = dq.topic_id "
@@ -477,6 +494,7 @@ class Repository:
                     active=bool(r["active"]),
                     created_at=r["t_created"],
                     paused=bool(r["paused"]),
+                    keywords_updated_at=r["keywords_updated_at"],
                 )
             )
         return list(grouped.values())

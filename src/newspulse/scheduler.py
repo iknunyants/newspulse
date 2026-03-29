@@ -12,7 +12,7 @@ from telegram.error import Forbidden, TelegramError
 from newspulse.db.models import Article, Topic
 from newspulse.db.repository import Repository
 from newspulse.formatting import format_digest, format_notification
-from newspulse.matching.keywords import article_matches_keywords
+from newspulse.matching.keywords import article_matches_keywords, generate_keywords
 from newspulse.matching.relevance import batch_check_multi_topic_relevance
 from newspulse.scrapers import SOURCE_LANGUAGES
 from newspulse.scrapers.web import get_all_scrapers
@@ -283,6 +283,34 @@ async def send_digests(repo: Repository, bot: Bot) -> None:
             logger.error("Digest: failed to send to %d: %s", user.telegram_id, e)
 
 
+async def refresh_keywords(repo: Repository) -> None:
+    """Regenerate keywords for topics that haven't been refreshed in 7 days.
+
+    Processes at most 20 topics per run to cap LLM costs.
+    Old keywords are preserved if generation fails.
+    """
+    stale = await repo.get_stale_topics(days=7, limit=20)
+    if not stale:
+        return
+
+    logger.info("Refreshing keywords for %d stale topics.", len(stale))
+    refreshed = 0
+    for topic in stale:
+        try:
+            new_keywords = await generate_keywords(topic.topic_text)
+            await repo.update_topic_keywords(topic.id, new_keywords)
+            refreshed += 1
+            logger.debug(
+                "Refreshed keywords for topic %r: %d keywords.",
+                topic.topic_text, len(new_keywords),
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to refresh keywords for topic %r: %s", topic.topic_text, e
+            )
+    logger.info("Keyword refresh complete: %d/%d topics updated.", refreshed, len(stale))
+
+
 def setup_scheduler(repo: Repository, bot: Bot, interval_minutes: int) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
@@ -300,5 +328,13 @@ def setup_scheduler(repo: Repository, bot: Bot, interval_minutes: int) -> AsyncI
         id="digest_job",
         replace_existing=True,
         misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        refresh_keywords,
+        trigger=IntervalTrigger(hours=24),
+        args=[repo],
+        id="keyword_refresh_job",
+        replace_existing=True,
+        misfire_grace_time=3600,
     )
     return scheduler
