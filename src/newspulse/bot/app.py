@@ -56,7 +56,8 @@ def create_app(settings: Settings, repo: Repository) -> Application:
     app.bot_data["repo"] = repo
 
     _keyboard_buttons = filters.Regex(
-        "^(📋 My Topics|❌ Remove Topic|🌐 Languages|📰 Sources|📊 Stats)$"
+        "^(📋 My Topics|❌ Remove Topic|🌐 Languages|📰 Sources|📊 Stats"
+        "|⏸ Pause Topic|▶️ Resume Topic|📬 Digest|❓ Help)$"
     )
 
     add_topic_conv = ConversationHandler(
@@ -79,6 +80,10 @@ def create_app(settings: Settings, repo: Repository) -> Application:
             MessageHandler(filters.Regex("^❌ Remove Topic$"), remove_topic),
             MessageHandler(filters.Regex("^🌐 Languages$"), languages_command),
             MessageHandler(filters.Regex("^📰 Sources$"), sources_command),
+            MessageHandler(filters.Regex("^⏸ Pause Topic$"), pause_topic_command),
+            MessageHandler(filters.Regex(r"^▶️ Resume Topic$"), resume_topic_command),
+            MessageHandler(filters.Regex("^📬 Digest$"), digest_command),
+            MessageHandler(filters.Regex("^❓ Help$"), help_command),
         ],
     )
 
@@ -100,7 +105,11 @@ def create_app(settings: Settings, repo: Repository) -> Application:
     app.add_handler(CallbackQueryHandler(digest_hour_callback, pattern=r"^digest_hour:"))
     app.add_handler(CallbackQueryHandler(digest_done_callback, pattern=r"^digest_done$"))
     app.add_handler(CommandHandler("pause_topic", pause_topic_command))
+    app.add_handler(MessageHandler(filters.Regex("^⏸ Pause Topic$"), pause_topic_command))
     app.add_handler(CommandHandler("resume_topic", resume_topic_command))
+    app.add_handler(MessageHandler(filters.Regex(r"^▶️ Resume Topic$"), resume_topic_command))
+    app.add_handler(MessageHandler(filters.Regex("^📬 Digest$"), digest_command))
+    app.add_handler(MessageHandler(filters.Regex("^❓ Help$"), help_command))
     app.add_handler(CallbackQueryHandler(feedback_callback, pattern=r"^fb:"))
     app.add_handler(CallbackQueryHandler(remove_topic_callback, pattern=r"^remove:"))
     app.add_handler(CallbackQueryHandler(pause_topic_callback, pattern=r"^pause:"))

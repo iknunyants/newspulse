@@ -78,7 +78,7 @@ class Repository:
         await self._conn.execute(
             "INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (telegram_id,)
         )
-        await self._conn.commit()
+        await self._commit()
         async with self._conn.execute(
             f"SELECT {self._USER_COLS} FROM users WHERE telegram_id = ?",
             (telegram_id,),
@@ -227,7 +227,7 @@ class Repository:
     async def get_paused_topics(self, user_id: int) -> list[Topic]:
         """Get all paused (but active) topics for a user."""
         async with self._conn.execute(
-            "SELECT id, user_id, topic_text, keywords_json, active, created_at "
+            "SELECT id, user_id, topic_text, keywords_json, active, created_at, paused "
             "FROM topics WHERE user_id = ? AND active = 1 AND paused = 1 "
             "ORDER BY id",
             (user_id,),
@@ -240,6 +240,7 @@ class Repository:
                 keywords_json=r["keywords_json"],
                 active=bool(r["active"]),
                 created_at=r["created_at"],
+                paused=bool(r["paused"]),
             )
             for r in rows
         ]
@@ -495,14 +496,13 @@ class Repository:
 
         Returns number of articles deleted.
         """
-        # Delete sent_articles referencing old articles first
-        await self._conn.execute(
-            "DELETE FROM sent_articles WHERE article_id IN ("
-            "  SELECT id FROM articles "
-            "  WHERE created_at < datetime('now', ? || ' days')"
-            ")",
-            (f"-{days}",),
-        )
+        old_clause = "SELECT id FROM articles WHERE created_at < datetime('now', ? || ' days')"
+        # Delete child rows referencing old articles before deleting articles (FK constraints)
+        for child_table in ("digest_queue", "article_feedback", "sent_articles"):
+            await self._conn.execute(
+                f"DELETE FROM {child_table} WHERE article_id IN ({old_clause})",
+                (f"-{days}",),
+            )
         result = await self._conn.execute(
             "DELETE FROM articles "
             "WHERE created_at < datetime('now', ? || ' days')",

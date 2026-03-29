@@ -417,3 +417,39 @@ async def test_delete_old_articles_cascades_sent(repo: Repository):
     assert deleted == 1
     # sent_articles record should also be gone
     assert await repo.is_article_sent(article.id, topic.id) is False
+
+
+async def test_delete_old_articles_cascades_digest_and_feedback(repo: Repository):
+    """Deleting old articles should clean up digest_queue and article_feedback (FK safety)."""
+    user = await repo.get_or_create_user(100)
+    topic = await repo.add_topic(user.id, "test", ["kw"])
+    article, _ = await repo.upsert_article(
+        source="Test", title="Old", url="https://example.com/old-fk",
+        summary="S", published_at=None,
+    )
+    await repo.queue_digest_article(user.id, article.id, topic.id)
+    await repo.save_feedback(user.id, article.id, relevant=True)
+
+    # Backdate the article
+    await repo._conn.execute(
+        "UPDATE articles SET created_at = datetime('now', '-60 days') WHERE id = ?",
+        (article.id,),
+    )
+    await repo._conn.commit()
+
+    # Should not raise FK constraint violation
+    deleted = await repo.delete_old_articles(days=30)
+    assert deleted == 1
+
+    # digest_queue and article_feedback rows should be gone
+    async with repo._conn.execute(
+        "SELECT COUNT(*) FROM digest_queue WHERE article_id = ?", (article.id,)
+    ) as cur:
+        row = await cur.fetchone()
+    assert row[0] == 0
+
+    async with repo._conn.execute(
+        "SELECT COUNT(*) FROM article_feedback WHERE article_id = ?", (article.id,)
+    ) as cur:
+        row = await cur.fetchone()
+    assert row[0] == 0

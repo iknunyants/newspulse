@@ -26,6 +26,8 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("➕ Add Topic"), KeyboardButton("📋 My Topics")],
         [KeyboardButton("❌ Remove Topic"), KeyboardButton("📊 Stats")],
         [KeyboardButton("🌐 Languages"), KeyboardButton("📰 Sources")],
+        [KeyboardButton("⏸ Pause Topic"), KeyboardButton("▶️ Resume Topic")],
+        [KeyboardButton("📬 Digest"), KeyboardButton("❓ Help")],
     ],
     resize_keyboard=True,
 )
@@ -113,10 +115,10 @@ async def languages_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def lang_toggle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Toggle a language on/off."""
     query = update.callback_query
-    await query.answer()
 
     code = query.data.split(":", 1)[1]
     if code not in SUPPORTED_LANGUAGES:
+        await query.answer()
         return
 
     repo = _get_repo(context)
@@ -132,6 +134,7 @@ async def lang_toggle_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         current.append(code)
 
     await repo.set_user_languages(user.id, current)
+    await query.answer()
     await query.edit_message_reply_markup(reply_markup=_language_keyboard(current))
 
 
@@ -195,11 +198,11 @@ async def sources_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def src_toggle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Toggle a source on/off."""
     query = update.callback_query
-    await query.answer()
 
     source_name = query.data.split(":", 1)[1]
     all_sources = get_all_source_names()
     if source_name not in all_sources:
+        await query.answer()
         return
 
     repo = _get_repo(context)
@@ -218,6 +221,7 @@ async def src_toggle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Store NULL if all sources are selected (backward-compatible default)
     new_value: list[str] | None = None if set(current) == set(all_sources) else current
     await repo.set_user_sources(user.id, new_value)
+    await query.answer()
     await query.edit_message_reply_markup(reply_markup=_source_keyboard(new_value))
 
 
@@ -504,12 +508,9 @@ async def feedback_callback(
     await repo.save_feedback(user.id, article_id, relevant)
 
     label = "👍 Relevant" if relevant else "👎 Not relevant"
-    # Remove the feedback buttons and append the feedback label
-    original_text = query.message.text_markdown_v2
-    await query.edit_message_text(
-        f"{original_text}\n\n_{_esc(label)}_",
-        parse_mode="MarkdownV2",
-    )
+    # Remove the feedback buttons; preserve the original message formatting
+    await query.answer(label)
+    await query.edit_message_reply_markup(reply_markup=None)
 
 
 async def free_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -564,7 +565,7 @@ async def action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if query.data == "action:list_topics":
         repo = _get_repo(context)
         user = await repo.get_or_create_user(query.from_user.id)
-        topics = await repo.get_active_topics(user.id)
+        topics = await repo.get_active_topics(user.id, include_paused=True)
 
         add_button = InlineKeyboardMarkup([[
             InlineKeyboardButton("➕ Add Topic", callback_data="action:add_topic"),
@@ -580,7 +581,8 @@ async def action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         else:
             lines = ["*Your active topics:*\n"]
             for i, t in enumerate(topics, 1):
-                lines.append(f"{i}\\. {_esc(t.topic_text)}")
+                status = " ⏸" if t.paused else ""
+                lines.append(f"{i}\\. {_esc(t.topic_text)}{status}")
             await context.bot.send_message(
                 chat_id,
                 "\n".join(lines),

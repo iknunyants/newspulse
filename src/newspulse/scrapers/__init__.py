@@ -1,4 +1,4 @@
-# Language codes: "en" = English, "hy" = Armenian, "ru" = Russian
+# Language codes: "en" = English, "hy" = Armenian
 SOURCE_LANGUAGES: dict[str, str] = {
     "BBC World": "en",
     "Al Jazeera": "en",

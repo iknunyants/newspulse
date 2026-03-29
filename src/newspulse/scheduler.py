@@ -239,7 +239,7 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
 
 async def send_digests(repo: Repository, bot: Bot) -> None:
     """Send queued digest articles to users whose digest_hour matches the current UTC hour."""
-    current_hour = datetime.datetime.utcnow().hour
+    current_hour = datetime.datetime.now(datetime.timezone.utc).hour
     users = await repo.get_users_for_digest(current_hour)
     if not users:
         return
