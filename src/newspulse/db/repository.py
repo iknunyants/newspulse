@@ -1,6 +1,8 @@
 import hashlib
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import AsyncIterator
 
 import aiosqlite
 
@@ -11,6 +13,30 @@ from newspulse.db.models import Article, Topic, User
 class Repository:
     def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn
+        self._batching: bool = False
+
+    @asynccontextmanager
+    async def batch(self) -> AsyncIterator[None]:
+        """Defer all commits until the end of the block.
+
+        Useful for bulk-write phases (scrape storage, notification sends)
+        where many individual writes happen and committing once at the end
+        is more efficient than committing after every row.
+
+        On any exception, commits whatever was written so far (partial
+        progress is better than losing an entire cycle for idempotent data).
+        """
+        self._batching = True
+        try:
+            yield
+        finally:
+            self._batching = False
+            await self._conn.commit()
+
+    async def _commit(self) -> None:
+        """Commit unless a batch is in progress."""
+        if not self._batching:
+            await self._conn.commit()
 
     @classmethod
     async def create(cls, db_path: Path) -> "Repository":
@@ -65,7 +91,7 @@ class Repository:
             "UPDATE users SET languages_json = ? WHERE id = ?",
             (json.dumps(languages, ensure_ascii=False), user_id),
         )
-        await self._conn.commit()
+        await self._commit()
 
     async def get_user_languages(self, user_id: int) -> list[str]:
         async with self._conn.execute(
@@ -82,7 +108,7 @@ class Repository:
             "UPDATE users SET sources_json = ? WHERE id = ?",
             (value, user_id),
         )
-        await self._conn.commit()
+        await self._commit()
 
     async def get_user_sources(self, user_id: int) -> list[str] | None:
         async with self._conn.execute(
@@ -101,7 +127,7 @@ class Repository:
             "INSERT INTO topics (user_id, topic_text, keywords_json) VALUES (?, ?, ?)",
             (user_id, topic_text, keywords_json),
         )
-        await self._conn.commit()
+        await self._commit()
         async with self._conn.execute(
             "SELECT id, user_id, topic_text, keywords_json, active, "
             "created_at, paused "
@@ -166,7 +192,7 @@ class Repository:
             "UPDATE topics SET active = 0 WHERE id = ? AND user_id = ? AND active = 1",
             (topic_id, user_id),
         )
-        await self._conn.commit()
+        await self._commit()
         return result.rowcount > 0
 
     async def reactivate_topics(self, user_id: int) -> int:
@@ -175,7 +201,7 @@ class Repository:
             "UPDATE topics SET active = 1 WHERE user_id = ? AND active = 0",
             (user_id,),
         )
-        await self._conn.commit()
+        await self._commit()
         return result.rowcount
 
     async def pause_topic(self, topic_id: int, user_id: int) -> bool:
@@ -185,7 +211,7 @@ class Repository:
             "WHERE id = ? AND user_id = ? AND active = 1 AND paused = 0",
             (topic_id, user_id),
         )
-        await self._conn.commit()
+        await self._commit()
         return result.rowcount > 0
 
     async def resume_topic(self, topic_id: int, user_id: int) -> bool:
@@ -195,7 +221,7 @@ class Repository:
             "WHERE id = ? AND user_id = ? AND active = 1 AND paused = 1",
             (topic_id, user_id),
         )
-        await self._conn.commit()
+        await self._commit()
         return result.rowcount > 0
 
     async def get_paused_topics(self, user_id: int) -> list[Topic]:
@@ -224,7 +250,7 @@ class Repository:
             "UPDATE topics SET active = 0 WHERE user_id = ?",
             (user_id,),
         )
-        await self._conn.commit()
+        await self._commit()
         return result.rowcount
 
     async def get_telegram_id(self, user_id: int) -> int | None:
@@ -273,7 +299,7 @@ class Repository:
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (url_hash, source, title, url, summary[:500], published_at, content[:5000]),
         )
-        await self._conn.commit()
+        await self._commit()
         async with self._conn.execute(
             "SELECT id, url_hash, source, title, url, summary, published_at, created_at, content "
             "FROM articles WHERE url_hash = ?",
@@ -287,7 +313,7 @@ class Repository:
             "UPDATE articles SET summary = ? WHERE id = ?",
             (summary[:500], article_id),
         )
-        await self._conn.commit()
+        await self._commit()
 
     async def is_article_sent(self, article_id: int, topic_id: int) -> bool:
         async with self._conn.execute(
@@ -301,7 +327,7 @@ class Repository:
             "INSERT OR IGNORE INTO sent_articles (article_id, topic_id) VALUES (?, ?)",
             (article_id, topic_id),
         )
-        await self._conn.commit()
+        await self._commit()
 
     # --- Scrape log ---
 
@@ -318,7 +344,7 @@ class Repository:
             " ON CONFLICT(source) DO UPDATE SET last_scraped_at = datetime('now')",
             (source,),
         )
-        await self._conn.commit()
+        await self._commit()
 
     # --- Stats ---
 
@@ -363,7 +389,7 @@ class Repository:
             "ON CONFLICT(user_id, article_id) DO UPDATE SET relevant = ?",
             (user_id, article_id, int(relevant), int(relevant)),
         )
-        await self._conn.commit()
+        await self._commit()
 
     async def get_feedback_stats(
         self, user_id: int
@@ -389,7 +415,7 @@ class Repository:
             "UPDATE users SET digest_mode = ?, digest_hour = ? WHERE id = ?",
             (int(enabled), hour, user_id),
         )
-        await self._conn.commit()
+        await self._commit()
 
     async def get_users_for_digest(self, current_hour: int) -> list[User]:
         """Get all users with digest_mode=1 whose digest_hour matches current_hour."""
@@ -410,7 +436,7 @@ class Repository:
             "(user_id, article_id, topic_id) VALUES (?, ?, ?)",
             (user_id, article_id, topic_id),
         )
-        await self._conn.commit()
+        await self._commit()
 
     async def get_digest_queue(
         self, user_id: int
@@ -460,7 +486,7 @@ class Repository:
         await self._conn.execute(
             "DELETE FROM digest_queue WHERE user_id = ?", (user_id,)
         )
-        await self._conn.commit()
+        await self._commit()
 
     # --- Cleanup ---
 
@@ -482,5 +508,5 @@ class Repository:
             "WHERE created_at < datetime('now', ? || ' days')",
             (f"-{days}",),
         )
-        await self._conn.commit()
+        await self._commit()
         return result.rowcount

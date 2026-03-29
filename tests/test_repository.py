@@ -144,6 +144,36 @@ async def test_article_sent_tracking(repo: Repository):
     assert await repo.is_article_sent(article.id, topic.id) is True
 
 
+async def test_batch_defers_commit(repo: Repository):
+    """Writes inside batch() are all visible after the context manager exits."""
+    user = await repo.get_or_create_user(100)
+
+    async with repo.batch():
+        await repo.add_topic(user.id, "topic A", ["kw1"])
+        await repo.add_topic(user.id, "topic B", ["kw2"])
+        await repo.upsert_article(
+            source="Test", title="T", url="https://example.com/1",
+            summary="S", published_at=None,
+        )
+
+    # All three writes visible after batch exits
+    assert await repo.count_active_topics(user.id) == 2
+    assert await repo.get_total_articles_count(days=1) == 1
+
+
+async def test_batch_multiple_writes_single_commit(repo: Repository):
+    """All writes inside batch() are flushed in one commit on exit."""
+    await repo.get_or_create_user(100)
+    async with repo.batch():
+        for i in range(5):
+            await repo.upsert_article(
+                source="Test", title=f"Article {i}",
+                url=f"https://example.com/{i}",
+                summary="S", published_at=None,
+            )
+    assert await repo.get_total_articles_count(days=1) == 5
+
+
 async def test_scrape_log(repo: Repository):
     assert await repo.get_last_scrape_time("BBC World") is None
     await repo.update_scrape_time("BBC World")

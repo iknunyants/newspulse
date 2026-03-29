@@ -85,23 +85,24 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
                     "Source %r: first scrape — storing baseline, skipping notifications.", source
                 )
 
-        for sa in scraped:
-            try:
-                article, is_new = await repo.upsert_article(
-                    source=sa.source,
-                    title=sa.title,
-                    url=sa.url,
-                    summary=sa.summary,
-                    published_at=sa.published_at,
-                    content=sa.content,
-                )
-                if is_new and sa.source not in first_scrape_sources:
-                    new_articles.append(article)
-            except Exception as e:
-                logger.error("Failed to store article %r: %s", sa.url, e)
+        async with repo.batch():
+            for sa in scraped:
+                try:
+                    article, is_new = await repo.upsert_article(
+                        source=sa.source,
+                        title=sa.title,
+                        url=sa.url,
+                        summary=sa.summary,
+                        published_at=sa.published_at,
+                        content=sa.content,
+                    )
+                    if is_new and sa.source not in first_scrape_sources:
+                        new_articles.append(article)
+                except Exception as e:
+                    logger.error("Failed to store article %r: %s", sa.url, e)
 
-        for source in sources_in_batch:
-            await repo.update_scrape_time(source)
+            for source in sources_in_batch:
+                await repo.update_scrape_time(source)
 
     logger.info("Scraped %d new articles.", len(new_articles))
     if not new_articles:
@@ -198,35 +199,37 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
 
     # 5. Send one notification per (user, article), listing all matching topics.
     #    Digest-mode users get articles queued instead of sent immediately.
+    #    mark_article_sent calls are batched to reduce commit overhead.
     user_blocked: dict[int, bool] = {}
 
-    for (user_id, _article_id), (telegram_id, article, matched_topics) in pending.items():
-        if user_blocked.get(user_id):
-            continue
+    async with repo.batch():
+        for (user_id, _article_id), (telegram_id, article, matched_topics) in pending.items():
+            if user_blocked.get(user_id):
+                continue
 
-        unsent_topics = [
-            t for t in matched_topics
-            if not await repo.is_article_sent(article.id, t.id)
-        ]
-        if not unsent_topics:
-            continue
+            unsent_topics = [
+                t for t in matched_topics
+                if not await repo.is_article_sent(article.id, t.id)
+            ]
+            if not unsent_topics:
+                continue
 
-        if user_digest.get(user_id):
-            # Queue for digest delivery — mark sent to prevent re-queueing next cycle
+            if user_digest.get(user_id):
+                # Queue for digest delivery — mark sent to prevent re-queueing next cycle
+                for t in unsent_topics:
+                    await repo.queue_digest_article(user_id, article.id, t.id)
+                    await repo.mark_article_sent(article.id, t.id)
+                continue
+
+            success = await _send_notification(bot, telegram_id, unsent_topics, article)
+
+            if not success:
+                user_blocked[user_id] = True
+                await repo.deactivate_all_topics(user_id)
+                continue
+
             for t in unsent_topics:
-                await repo.queue_digest_article(user_id, article.id, t.id)
                 await repo.mark_article_sent(article.id, t.id)
-            continue
-
-        success = await _send_notification(bot, telegram_id, unsent_topics, article)
-
-        if not success:
-            user_blocked[user_id] = True
-            await repo.deactivate_all_topics(user_id)
-            continue
-
-        for t in unsent_topics:
-            await repo.mark_article_sent(article.id, t.id)
 
     # 6. Clean up old articles (older than 30 days)
     deleted = await repo.delete_old_articles(days=30)
