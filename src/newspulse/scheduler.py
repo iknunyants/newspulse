@@ -5,13 +5,14 @@ import logging
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import Forbidden, TelegramError
 
 from newspulse.db.models import Article, Topic
 from newspulse.db.repository import Repository
-from newspulse.formatting import format_digest, format_notification
+from newspulse.formatting import format_digest_parts, format_notification
 from newspulse.matching.keywords import article_matches_keywords
 from newspulse.matching.relevance import batch_check_multi_topic_relevance
 from newspulse.scrapers import SOURCE_LANGUAGES
@@ -263,18 +264,19 @@ async def send_digests(repo: Repository, bot: Bot) -> None:
             for article, topics in items
         ]
 
-        text = format_digest(payload)
+        parts = format_digest_parts(payload)
         try:
-            await bot.send_message(
-                chat_id=user.telegram_id,
-                text=text,
-                parse_mode="MarkdownV2",
-                disable_web_page_preview=True,
-            )
+            for part in parts:
+                await bot.send_message(
+                    chat_id=user.telegram_id,
+                    text=part,
+                    parse_mode="MarkdownV2",
+                    disable_web_page_preview=True,
+                )
             await repo.clear_digest_queue(user.id)
             logger.info(
-                "Sent digest to user %d (%d articles).",
-                user.telegram_id, len(items),
+                "Sent digest to user %d (%d articles, %d messages).",
+                user.telegram_id, len(items), len(parts),
             )
         except Forbidden:
             logger.warning("Digest: user %d blocked the bot.", user.telegram_id)
@@ -295,7 +297,7 @@ def setup_scheduler(repo: Repository, bot: Bot, interval_minutes: int) -> AsyncI
     )
     scheduler.add_job(
         send_digests,
-        trigger=IntervalTrigger(hours=1),
+        trigger=CronTrigger(minute=0),
         args=[repo, bot],
         id="digest_job",
         replace_existing=True,

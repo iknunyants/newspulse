@@ -70,24 +70,57 @@ def format_notification(
     return "\n\n".join(parts)
 
 
+def format_digest_parts(
+    items: list[tuple[str, str, str, str, list[str]]],
+    max_len: int = 4096,
+) -> list[str]:
+    """Build MarkdownV2 digest messages split to stay under Telegram's character limit.
+
+    Each item is (title, summary, source, url, topic_texts).
+    Returns a list of message strings, each under max_len characters.
+    """
+    parts: list[str] = []
+    header = "📰 *Your Daily Digest*\n"
+    current_entries: list[str] = []
+    current_header = header
+    current_len = len(header)
+    article_index = 1
+
+    for title, summary, source, url, topic_texts in items:
+        short = extract_summary(summary, max_sentences=1)
+        topics_str = escape_md(", ".join(topic_texts))
+        entry = (
+            f"*{article_index}\\. {escape_md(title)}*\n"
+            f"{escape_md(short)}\n"
+            f"📰 _{escape_md(source)}_ · 🏷 _{topics_str}_\n"
+            f"[Read]({escape_url(url)})"
+        )
+        # "\n\n" separator between entries
+        needed = len(entry) + (2 if current_entries else 0)
+        if current_entries and current_len + needed > max_len:
+            parts.append(current_header + "\n\n".join(current_entries))
+            current_header = "📰 *Your Daily Digest \\_\\(continued\\)_*\n"
+            current_entries = []
+            current_len = len(current_header)
+        current_entries.append(entry)
+        current_len += needed
+        article_index += 1
+
+    if current_entries:
+        parts.append(current_header + "\n\n".join(current_entries))
+    elif not parts:
+        # Empty digest — return just the header
+        parts.append(header)
+
+    return parts
+
+
 def format_digest(
     items: list[tuple[str, str, str, str, list[str]]],
 ) -> str:
     """Build a MarkdownV2 daily digest message.
 
     Each item is (title, summary, source, url, topic_texts).
-    Groups articles with a numbered list.
+    Returns the first message part (use format_digest_parts for multi-part digests).
     """
-    header = "📰 *Your Daily Digest*\n"
-    lines: list[str] = [header]
-    for i, (title, summary, source, url, topic_texts) in enumerate(items, 1):
-        short = extract_summary(summary, max_sentences=1)
-        topics_str = escape_md(", ".join(topic_texts))
-        entry = (
-            f"*{i}\\. {escape_md(title)}*\n"
-            f"{escape_md(short)}\n"
-            f"📰 _{escape_md(source)}_ · 🏷 _{topics_str}_\n"
-            f"[Read]({escape_url(url)})"
-        )
-        lines.append(entry)
-    return "\n\n".join(lines)
+    return format_digest_parts(items)[0]
