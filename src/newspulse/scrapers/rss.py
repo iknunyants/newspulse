@@ -51,7 +51,7 @@ class RssScraper(BaseScraper):
                     source=source_name,
                     title=title,
                     url=url,
-                    summary=summary[:500],
+                    summary="",
                     published_at=published_at,
                     content=summary,
                 )
@@ -70,8 +70,8 @@ class RssScraper(BaseScraper):
                 continue
             articles.extend(result)
 
-        # Fetch full article content for articles with no/short summary (title-only feeds)
-        needs_content = [(i, a) for i, a in enumerate(articles) if len(a.summary) < 50]
+        # Fetch full article content for articles with no/short content (title-only feeds)
+        needs_content = [(i, a) for i, a in enumerate(articles) if len(a.content) < 50]
         if needs_content:
             fetched = await asyncio.gather(
                 *[_fetch_article_content(client, a.url) for _, a in needs_content],
@@ -80,7 +80,5 @@ class RssScraper(BaseScraper):
             for (idx, article), body in zip(needs_content, fetched):
                 if isinstance(body, str) and body:
                     article.content = body
-                    if not article.summary:
-                        article.summary = body[:500]
 
         return articles
