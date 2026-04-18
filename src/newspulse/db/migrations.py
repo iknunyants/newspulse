@@ -126,4 +126,44 @@ async def init_db(conn: aiosqlite.Connection) -> None:
         "  UNIQUE(user_id, article_id, topic_id)"
         ")"
     )
+    # Telegram channel monitoring
+    await conn.execute(
+        "CREATE TABLE IF NOT EXISTS telegram_channels ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  username TEXT UNIQUE NOT NULL,"
+        "  title TEXT NOT NULL,"
+        "  added_by_user_id INTEGER NOT NULL REFERENCES users(id),"
+        "  active INTEGER NOT NULL DEFAULT 1,"
+        "  created_at TEXT NOT NULL DEFAULT (datetime('now'))"
+        ")"
+    )
+    await conn.execute(
+        "CREATE TABLE IF NOT EXISTS user_channel_modes ("
+        "  user_id INTEGER NOT NULL REFERENCES users(id),"
+        "  channel_id INTEGER NOT NULL REFERENCES telegram_channels(id),"
+        "  mode TEXT NOT NULL DEFAULT 'filter',"
+        "  PRIMARY KEY (user_id, channel_id)"
+        ")"
+    )
+    await conn.execute(
+        "CREATE TABLE IF NOT EXISTS forward_sent ("
+        "  user_id INTEGER NOT NULL REFERENCES users(id),"
+        "  article_id INTEGER NOT NULL REFERENCES articles(id),"
+        "  sent_at TEXT NOT NULL DEFAULT (datetime('now')),"
+        "  PRIMARY KEY (user_id, article_id)"
+        ")"
+    )
+    for col_sql in [
+        "ALTER TABLE articles ADD COLUMN forwarded_from TEXT",
+        "ALTER TABLE articles ADD COLUMN media_url TEXT",
+        "ALTER TABLE articles ADD COLUMN content_hash TEXT",
+    ]:
+        try:
+            await conn.execute(col_sql)
+        except Exception:
+            pass
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_articles_content_hash "
+        "ON articles(content_hash, created_at)"
+    )
     await conn.commit()

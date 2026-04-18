@@ -25,6 +25,9 @@ class ScrapedArticle:
     summary: str
     published_at: str | None
     content: str = ""
+    forwarded_from: str | None = None
+    media_url: str | None = None
+    content_hash: str | None = None
 
 
 _FETCH_SEMAPHORE = asyncio.Semaphore(5)

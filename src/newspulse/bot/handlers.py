@@ -1,6 +1,7 @@
 import json
 import logging
 
+import httpx
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -14,12 +15,19 @@ from newspulse.config import settings
 from newspulse.db.repository import Repository
 from newspulse.formatting import escape_md as _esc
 from newspulse.matching.keywords import generate_keywords
-from newspulse.scrapers import SOURCE_LANGUAGES, SUPPORTED_LANGUAGES, get_all_source_names
+from newspulse.scrapers import (
+    SOURCE_LANGUAGES,
+    SUPPORTED_LANGUAGES,
+    get_all_source_names,
+    get_all_source_names_with_channels,
+)
+from newspulse.scrapers.telegram import fetch_channel_title, parse_channel_username
 
 logger = logging.getLogger(__name__)
 
-# ConversationHandler state
+# ConversationHandler states
 WAITING_FOR_TOPIC = 0
+WAITING_FOR_CHANNEL = 1
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
@@ -27,6 +35,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("❌ Remove Topic"), KeyboardButton("📊 Stats")],
         [KeyboardButton("🌐 Languages"), KeyboardButton("📰 Sources")],
         [KeyboardButton("⏸ Pause Topic"), KeyboardButton("▶️ Resume Topic")],
+        [KeyboardButton("📡 Add Channel"), KeyboardButton("📡 My Channels")],
         [KeyboardButton("📬 Digest"), KeyboardButton("❓ Help")],
     ],
     resize_keyboard=True,
@@ -45,6 +54,9 @@ WELCOME = (
     "/digest — Toggle daily digest mode\n"
     "/languages — Choose news languages\n"
     "/sources — Choose which news sources to follow\n"
+    "/add\\_channel — Monitor a Telegram channel\n"
+    "/list\\_channels — Show monitored channels\n"
+    "/remove\\_channel — Stop monitoring a channel\n"
     "/help — Show this message"
 )
 
@@ -153,32 +165,50 @@ async def lang_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 
-def _source_keyboard(selected: list[str] | None) -> InlineKeyboardMarkup:
-    """Build the source toggle inline keyboard, grouped by language."""
-    all_sources = get_all_source_names()
-    # Group sources by language code
+def _source_keyboard(
+    all_sources: list[str], selected: list[str] | None
+) -> InlineKeyboardMarkup:
+    """Build the source toggle inline keyboard, grouped by language, with Telegram section."""
     by_lang: dict[str, list[str]] = {}
+    tg_sources: list[str] = []
     for name in all_sources:
-        lang = SOURCE_LANGUAGES.get(name, "en")
-        by_lang.setdefault(lang, []).append(name)
+        if name.startswith("tg:"):
+            tg_sources.append(name)
+        else:
+            lang = SOURCE_LANGUAGES.get(name, "en")
+            by_lang.setdefault(lang, []).append(name)
+
+    def _checked(s: str) -> str:
+        on = selected is None or s in selected
+        return "✅" if on else "⬜"
 
     rows: list[list[InlineKeyboardButton]] = []
     for lang_code, lang_name in SUPPORTED_LANGUAGES.items():
         sources_in_lang = by_lang.get(lang_code, [])
         if not sources_in_lang:
             continue
-        # Language header row (non-interactive)
         rows.append([InlineKeyboardButton(f"── {lang_name} ──", callback_data="src_noop")])
-        # Source toggle buttons in pairs
         for i in range(0, len(sources_in_lang), 2):
             pair = sources_in_lang[i:i + 2]
             rows.append([
                 InlineKeyboardButton(
-                    f"{'✅' if (selected is None or s in selected) else '⬜'} {s}",
+                    f"{_checked(s)} {s}", callback_data=f"src_toggle:{s}"
+                )
+                for s in pair
+            ])
+
+    if tg_sources:
+        rows.append([InlineKeyboardButton("── 📡 Channels ──", callback_data="src_noop")])
+        for i in range(0, len(tg_sources), 2):
+            pair = tg_sources[i:i + 2]
+            rows.append([
+                InlineKeyboardButton(
+                    f"{_checked(s)} @{s[3:]}",
                     callback_data=f"src_toggle:{s}",
                 )
                 for s in pair
             ])
+
     rows.append([InlineKeyboardButton("Done ✓", callback_data="src_done")])
     return InlineKeyboardMarkup(rows)
 
@@ -188,10 +218,11 @@ async def sources_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     repo = _get_repo(context)
     user = await repo.get_or_create_user(update.effective_user.id)
     current = await repo.get_user_sources(user.id)
+    all_sources = await get_all_source_names_with_channels(repo)
     await update.message.reply_text(
         "📰 *Choose your news sources:*\nYou'll only receive articles from selected sources\\.",
         parse_mode="MarkdownV2",
-        reply_markup=_source_keyboard(current),
+        reply_markup=_source_keyboard(all_sources, current),
     )
 
 
@@ -200,15 +231,16 @@ async def src_toggle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
 
     source_name = query.data.split(":", 1)[1]
-    all_sources = get_all_source_names()
+    repo = _get_repo(context)
+    all_sources = await get_all_source_names_with_channels(repo)
     if source_name not in all_sources:
         await query.answer()
         return
 
-    repo = _get_repo(context)
     user = await repo.get_or_create_user(query.from_user.id)
     raw = await repo.get_user_sources(user.id)
-    current: list[str] = list(all_sources) if raw is None else list(raw)
+    static_sources = get_all_source_names()
+    current: list[str] = list(static_sources) if raw is None else list(raw)
 
     if source_name in current:
         if len(current) == 1:
@@ -218,11 +250,16 @@ async def src_toggle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         current.append(source_name)
 
-    # Store NULL if all sources are selected (backward-compatible default)
-    new_value: list[str] | None = None if set(current) == set(all_sources) else current
+    # Store NULL only if exactly the static (non-Telegram) sources are all selected
+    tg_in_current = [s for s in current if s.startswith("tg:")]
+    static_in_current = [s for s in current if not s.startswith("tg:")]
+    if not tg_in_current and set(static_in_current) == set(static_sources):
+        new_value: list[str] | None = None
+    else:
+        new_value = current
     await repo.set_user_sources(user.id, new_value)
     await query.answer()
-    await query.edit_message_reply_markup(reply_markup=_source_keyboard(new_value))
+    await query.edit_message_reply_markup(reply_markup=_source_keyboard(all_sources, new_value))
 
 
 async def src_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -233,8 +270,14 @@ async def src_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     repo = _get_repo(context)
     user = await repo.get_or_create_user(query.from_user.id)
     current = await repo.get_user_sources(user.id)
-    all_sources = get_all_source_names()
-    names = ", ".join(current) if current is not None else ", ".join(all_sources)
+    static_names = get_all_source_names()
+    if current is None:
+        display_names = static_names
+    else:
+        display_names = [
+            f"@{s[3:]}" if s.startswith("tg:") else s for s in current
+        ]
+    names = ", ".join(display_names)
     await query.edit_message_text(
         f"✅ Sources set: *{_esc(names)}*",
         parse_mode="MarkdownV2",
@@ -704,5 +747,238 @@ async def stats_command(
 
     await update.message.reply_text(
         "\n".join(lines),
+        parse_mode="MarkdownV2",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Telegram channel monitoring
+# ---------------------------------------------------------------------------
+
+async def add_channel_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text(
+        "📡 Send the Telegram channel link or \\@handle\\.\n\n"
+        "Examples: `t\\.me/bbcnews`, `@bbcnews`, `bbcnews`\n\n"
+        "Send /cancel to abort\\.",
+        parse_mode="MarkdownV2",
+    )
+    return WAITING_FOR_CHANNEL
+
+
+async def add_channel_receive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    username = parse_channel_username(text)
+    if not username:
+        await update.message.reply_text(
+            "❌ Invalid format\\. Please send a link like `t\\.me/name` or `@name`\\.",
+            parse_mode="MarkdownV2",
+        )
+        return WAITING_FOR_CHANNEL
+
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(update.effective_user.id)
+
+    # Check per-user channel limit
+    user_channels = await repo.list_channels_added_by(user.id)
+    if len(user_channels) >= settings.max_channels_per_user:
+        await update.message.reply_text(
+            f"You already manage {len(user_channels)} channels "
+            f"\\(max {settings.max_channels_per_user}\\)\\. "
+            "Remove one with /remove\\_channel first\\.",
+            parse_mode="MarkdownV2",
+        )
+        return ConversationHandler.END
+
+    source_key = f"tg:{username}"
+
+    # If channel already exists and is active, just subscribe the user to it
+    existing = await repo.get_telegram_channel_by_username(username)
+    if existing and existing.active:
+        user_sources = await repo.get_user_sources(user.id)
+        static_names = get_all_source_names()
+        sources: list[str] = list(static_names) if user_sources is None else list(user_sources)
+        if source_key not in sources:
+            sources.append(source_key)
+            await repo.set_user_sources(user.id, sources)
+        await update.message.reply_text(
+            f"✅ Now monitoring *{_esc(existing.title)}* \\(@{_esc(username)}\\)\\.\n"
+            "Posts matching your topics will arrive within 15 minutes\\.",
+            parse_mode="MarkdownV2",
+        )
+        return ConversationHandler.END
+
+    # Validate the channel by fetching its preview page
+    await update.message.reply_text("⏳ Validating channel…")
+    async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
+        title = await fetch_channel_title(username, client)
+
+    if not title:
+        await update.message.reply_text(
+            "❌ Channel not found, is private, or has preview disabled\\.\n"
+            "Only public channels with web previews can be monitored\\.",
+            parse_mode="MarkdownV2",
+        )
+        return ConversationHandler.END
+
+    await repo.add_telegram_channel(username, title, user.id)
+
+    user_sources = await repo.get_user_sources(user.id)
+    static_names = get_all_source_names()
+    sources = list(static_names) if user_sources is None else list(user_sources)
+    if source_key not in sources:
+        sources.append(source_key)
+        await repo.set_user_sources(user.id, sources)
+
+    await update.message.reply_text(
+        f"✅ Channel added: *{_esc(title)}* \\(@{_esc(username)}\\)\\.\n\n"
+        "Posts matching your topics will be monitored every 15 minutes\\.\n"
+        "Use /list\\_channels to manage channels or toggle forward\\-all mode\\.",
+        parse_mode="MarkdownV2",
+    )
+    return ConversationHandler.END
+
+
+async def add_channel_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Channel addition cancelled\\.", parse_mode="MarkdownV2")
+    return ConversationHandler.END
+
+
+async def list_channels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(update.effective_user.id)
+    channels = await repo.get_active_telegram_channels()
+    user_sources = await repo.get_user_sources(user.id)
+    subscribed: set[str] = (
+        set(user_sources) if user_sources is not None else set()
+    )
+
+    if not channels:
+        await update.message.reply_text(
+            "No Telegram channels are being monitored yet\\. "
+            "Use /add\\_channel to add one\\.",
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    rows: list[list[InlineKeyboardButton]] = []
+    lines = ["*📡 Monitored Telegram channels:*\n"]
+    for ch in channels:
+        source_key = f"tg:{ch.username}"
+        is_mine = ch.added_by_user_id == user.id
+        is_subscribed = source_key in subscribed
+        mode = await repo.get_user_channel_mode(user.id, ch.id)
+
+        label = f"@{ch.username} — {ch.title}"
+        if is_mine:
+            label += " \\(yours\\)"
+        lines.append(_esc(label))
+
+        btns: list[InlineKeyboardButton] = []
+        if is_subscribed:
+            mode_label = "✅ Forward all" if mode == "forward_all" else "⬜ Forward all"
+            btns.append(InlineKeyboardButton(mode_label, callback_data=f"ch_mode:{ch.id}"))
+        if is_mine:
+            btns.append(InlineKeyboardButton("🗑 Remove", callback_data=f"ch_remove:{ch.id}"))
+        if btns:
+            rows.append(btns)
+
+    await update.message.reply_text(
+        "\n".join(lines),
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(rows) if rows else None,
+    )
+
+
+async def remove_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(update.effective_user.id)
+    channels = await repo.list_channels_added_by(user.id)
+
+    if not channels:
+        await update.message.reply_text(
+            "You have no channels to remove\\. "
+            "Only channels you added can be removed\\.",
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(
+            f"🗑 @{ch.username} — {ch.title[:40]}",
+            callback_data=f"ch_remove:{ch.id}",
+        )]
+        for ch in channels
+    ]
+    await update.message.reply_text(
+        "Which channel do you want to remove?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def channel_mode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle forward_all / filter mode for a channel."""
+    query = update.callback_query
+    await query.answer()
+
+    channel_id = int(query.data.split(":")[1])
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(query.from_user.id)
+
+    current_mode = await repo.get_user_channel_mode(user.id, channel_id)
+    new_mode = "filter" if current_mode == "forward_all" else "forward_all"
+    await repo.set_user_channel_mode(user.id, channel_id, new_mode)
+
+    if new_mode == "forward_all":
+        msg = (
+            "✅ *Forward\\-all mode ON* — every post from this channel will be "
+            "delivered to you unfiltered\\."
+        )
+    else:
+        msg = (
+            "⬜ *Forward\\-all mode OFF* — only posts matching your topics will be delivered\\."
+        )
+    await query.answer(
+        "Forward-all ON" if new_mode == "forward_all" else "Filter mode ON",
+        show_alert=False,
+    )
+    await query.edit_message_text(msg, parse_mode="MarkdownV2")
+
+
+async def channel_remove_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Remove a channel (only the adder can do this)."""
+    query = update.callback_query
+    await query.answer()
+
+    channel_id = int(query.data.split(":")[1])
+    repo = _get_repo(context)
+    user = await repo.get_or_create_user(query.from_user.id)
+
+    # Fetch channel and verify ownership
+    channels = await repo.get_active_telegram_channels()
+    channel = next((ch for ch in channels if ch.id == channel_id), None)
+    if not channel or channel.added_by_user_id != user.id:
+        await query.edit_message_text(
+            "Channel not found or you are not the owner\\.", parse_mode="MarkdownV2"
+        )
+        return
+
+    source_key = f"tg:{channel.username}"
+
+    # Deactivate the channel
+    await repo.deactivate_telegram_channel(channel.username)
+
+    # Remove source key from all users' sources_json
+    async with repo._conn.execute(
+        "SELECT id, sources_json FROM users WHERE sources_json IS NOT NULL"
+    ) as cur:
+        user_rows = await cur.fetchall()
+    for row in user_rows:
+        srcs = json.loads(row["sources_json"])
+        if source_key in srcs:
+            srcs.remove(source_key)
+            await repo.set_user_sources(row["id"], srcs if srcs else None)
+
+    await query.edit_message_text(
+        f"✅ Channel *@{_esc(channel.username)}* removed\\.",
         parse_mode="MarkdownV2",
     )

@@ -10,6 +10,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import Forbidden, TelegramError
 
+from newspulse.config import settings
 from newspulse.db.models import Article, Topic
 from newspulse.db.repository import Repository
 from newspulse.formatting import format_digest_parts, format_notification
@@ -26,12 +27,18 @@ async def _send_notification(
     bot: Bot, telegram_id: int, topics: list[Topic], article: Article
 ) -> bool:
     """Send a single article notification. Returns False if user blocked the bot."""
+    source_display = (
+        "@" + article.source[3:]
+        if article.source.startswith("tg:")
+        else article.source
+    )
     text = format_notification(
         title=article.title,
         content=article.summary or article.content,
-        source=article.source,
+        source=source_display,
         url=article.url,
         topic_texts=[t.topic_text for t in topics],
+        forwarded_from=article.forwarded_from,
     )
     feedback_kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("👍", callback_data=f"fb:1:{article.id}"),
@@ -58,7 +65,7 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
     logger.info("Starting scrape cycle...")
 
     # 1. Scrape all sources concurrently
-    scrapers = get_all_scrapers()
+    scrapers = await get_all_scrapers(repo)
     transport = httpx.AsyncHTTPTransport(retries=2)
     async with httpx.AsyncClient(transport=transport, follow_redirects=True, timeout=30) as client:
         results = await asyncio.gather(
@@ -96,9 +103,30 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
                         summary=sa.summary,
                         published_at=sa.published_at,
                         content=sa.content,
+                        forwarded_from=sa.forwarded_from,
+                        media_url=sa.media_url,
+                        content_hash=sa.content_hash,
                     )
                     if is_new and sa.source not in first_scrape_sources:
-                        new_articles.append(article)
+                        if sa.content_hash and sa.source.startswith("tg:"):
+                            window = datetime.timedelta(
+                                minutes=settings.telegram_dedup_window_minutes
+                            )
+                            since = (
+                                datetime.datetime.utcnow() - window
+                            ).strftime("%Y-%m-%dT%H:%M:%S")
+                            dup = await repo.find_recent_article_by_content_hash(
+                                sa.content_hash, since, exclude_id=article.id
+                            )
+                            if dup:
+                                logger.debug(
+                                    "Dedup: %r matches content of %r, skipping notify",
+                                    article.url, dup.url,
+                                )
+                            else:
+                                new_articles.append(article)
+                        else:
+                            new_articles.append(article)
                 except Exception as e:
                     logger.error("Failed to store article %r: %s", sa.url, e)
 
@@ -145,9 +173,14 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
         keywords = json.loads(topic.keywords_json)
 
         for article in new_articles:
-            if SOURCE_LANGUAGES.get(article.source, "en") not in user_langs:
+            is_tg = article.source.startswith("tg:")
+            # Telegram channels bypass the language filter (user opted in explicitly)
+            if not is_tg and SOURCE_LANGUAGES.get(article.source, "en") not in user_langs:
                 continue
-            if allowed is not None and article.source not in allowed:
+            # Telegram sources always require explicit source allowance
+            if is_tg and (allowed is None or article.source not in allowed):
+                continue
+            elif not is_tg and allowed is not None and article.source not in allowed:
                 continue
             if not article_matches_keywords(article.title, article.summary, keywords):
                 continue
@@ -232,7 +265,29 @@ async def scrape_and_notify(repo: Repository, bot: Bot) -> None:
             for t in unsent_topics:
                 await repo.mark_article_sent(article.id, t.id)
 
-    # 6. Clean up old articles (older than 30 days)
+    # 6. Raw-forward fan-out for Telegram channels
+    for article in new_articles:
+        if not article.source.startswith("tg:"):
+            continue
+        username = article.source[3:]
+        channel = await repo.get_telegram_channel_by_username(username)
+        if not channel:
+            continue
+        forward_users = await repo.get_users_with_forward_all(channel.id)
+        for fw_user_id, fw_telegram_id in forward_users:
+            if user_blocked.get(fw_user_id):
+                continue
+            if (fw_user_id, article.id) in pending:
+                continue  # already delivered via topic match
+            if await repo.is_article_forward_sent(fw_user_id, article.id):
+                continue
+            success = await _send_notification(bot, fw_telegram_id, [], article)
+            if success:
+                await repo.mark_article_forward_sent(fw_user_id, article.id)
+            else:
+                user_blocked[fw_user_id] = True
+
+    # 7. Clean up old articles (older than 30 days)
     deleted = await repo.delete_old_articles(days=30)
     if deleted:
         logger.info("Cleaned up %d old articles.", deleted)

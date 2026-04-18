@@ -34,3 +34,23 @@ class Article:
     published_at: str | None
     created_at: str
     content: str = ""
+    forwarded_from: str | None = None
+    media_url: str | None = None
+    content_hash: str | None = None
+
+
+@dataclass
+class TelegramChannel:
+    id: int
+    username: str
+    title: str
+    added_by_user_id: int
+    active: bool
+    created_at: str
+
+
+@dataclass
+class UserChannelMode:
+    user_id: int
+    channel_id: int
+    mode: str  # 'filter' | 'forward_all'

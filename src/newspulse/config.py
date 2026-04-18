@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     max_topics_per_user: int = 10
     gemini_model: str = "gemini-3.1-flash-lite-preview"
     gemini_model_keywords: str = "gemini-3-flash-preview"
+    max_channels_per_user: int = 10
+    telegram_dedup_window_minutes: int = 360
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

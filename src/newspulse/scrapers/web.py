@@ -1,8 +1,14 @@
+from __future__ import annotations
+
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 import httpx
 from bs4 import BeautifulSoup
+
+if TYPE_CHECKING:
+    from newspulse.db.repository import Repository
 
 from newspulse.scrapers.base import (
     _FETCH_SEMAPHORE,  # noqa: F401 — re-exported for tests/scripts
@@ -77,9 +83,12 @@ class ArkaScraper(BaseScraper):
         return articles
 
 
-def get_all_scrapers() -> list[BaseScraper]:
+async def get_all_scrapers(repo: "Repository") -> list[BaseScraper]:
     from newspulse.scrapers.rss import RssScraper
-    return [
-        RssScraper(),
-        ArkaScraper(),
-    ]
+    from newspulse.scrapers.telegram import TelegramChannelScraper
+
+    scrapers: list[BaseScraper] = [RssScraper(), ArkaScraper()]
+    channels = await repo.get_active_telegram_channels()
+    if channels:
+        scrapers.append(TelegramChannelScraper(channels))
+    return scrapers

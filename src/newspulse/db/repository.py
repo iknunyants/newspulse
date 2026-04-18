@@ -7,7 +7,7 @@ from typing import AsyncIterator
 import aiosqlite
 
 from newspulse.db.migrations import init_db
-from newspulse.db.models import Article, Topic, User
+from newspulse.db.models import Article, TelegramChannel, Topic, User
 
 
 class Repository:
@@ -276,6 +276,11 @@ class Repository:
     def _url_hash(url: str) -> str:
         return hashlib.sha256(url.encode()).hexdigest()
 
+    _ARTICLE_COLS = (
+        "id, url_hash, source, title, url, summary, published_at, created_at, content,"
+        " forwarded_from, media_url, content_hash"
+    )
+
     async def upsert_article(
         self,
         source: str,
@@ -284,11 +289,13 @@ class Repository:
         summary: str,
         published_at: str | None,
         content: str = "",
+        forwarded_from: str | None = None,
+        media_url: str | None = None,
+        content_hash: str | None = None,
     ) -> tuple[Article, bool]:
         url_hash = self._url_hash(url)
         async with self._conn.execute(
-            "SELECT id, url_hash, source, title, url, summary, published_at, created_at, content "
-            "FROM articles WHERE url_hash = ?",
+            f"SELECT {self._ARTICLE_COLS} FROM articles WHERE url_hash = ?",
             (url_hash,),
         ) as cur:
             existing = await cur.fetchone()
@@ -296,14 +303,18 @@ class Repository:
             return Article(**existing), False
 
         await self._conn.execute(
-            "INSERT INTO articles (url_hash, source, title, url, summary, published_at, content) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (url_hash, source, title, url, summary[:500], published_at, content[:5000]),
+            "INSERT INTO articles "
+            "(url_hash, source, title, url, summary, published_at, content,"
+            " forwarded_from, media_url, content_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                url_hash, source, title, url, summary[:500], published_at,
+                content[:5000], forwarded_from, media_url, content_hash,
+            ),
         )
         await self._commit()
         async with self._conn.execute(
-            "SELECT id, url_hash, source, title, url, summary, published_at, created_at, content "
-            "FROM articles WHERE url_hash = ?",
+            f"SELECT {self._ARTICLE_COLS} FROM articles WHERE url_hash = ?",
             (url_hash,),
         ) as cur:
             row = await cur.fetchone()
@@ -489,6 +500,136 @@ class Repository:
         )
         await self._commit()
 
+    async def find_recent_article_by_content_hash(
+        self, content_hash: str, since_iso: str, exclude_id: int = -1
+    ) -> Article | None:
+        async with self._conn.execute(
+            f"SELECT {self._ARTICLE_COLS} FROM articles "
+            "WHERE content_hash = ? AND created_at >= ? AND id != ? LIMIT 1",
+            (content_hash, since_iso, exclude_id),
+        ) as cur:
+            row = await cur.fetchone()
+        return Article(**row) if row else None
+
+    # --- Telegram channels ---
+
+    async def add_telegram_channel(
+        self, username: str, title: str, added_by_user_id: int
+    ) -> int:
+        await self._conn.execute(
+            "INSERT INTO telegram_channels (username, title, added_by_user_id) "
+            "VALUES (?, ?, ?)",
+            (username, title, added_by_user_id),
+        )
+        await self._commit()
+        async with self._conn.execute(
+            "SELECT id FROM telegram_channels WHERE username = ?", (username,)
+        ) as cur:
+            row = await cur.fetchone()
+        return row["id"]
+
+    async def get_active_telegram_channels(self) -> list[TelegramChannel]:
+        async with self._conn.execute(
+            "SELECT id, username, title, added_by_user_id, active, created_at "
+            "FROM telegram_channels WHERE active = 1 ORDER BY id"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [
+            TelegramChannel(
+                id=r["id"], username=r["username"], title=r["title"],
+                added_by_user_id=r["added_by_user_id"],
+                active=bool(r["active"]), created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+
+    async def get_telegram_channel_by_username(
+        self, username: str
+    ) -> TelegramChannel | None:
+        async with self._conn.execute(
+            "SELECT id, username, title, added_by_user_id, active, created_at "
+            "FROM telegram_channels WHERE username = ?",
+            (username,),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return None
+        return TelegramChannel(
+            id=row["id"], username=row["username"], title=row["title"],
+            added_by_user_id=row["added_by_user_id"],
+            active=bool(row["active"]), created_at=row["created_at"],
+        )
+
+    async def deactivate_telegram_channel(self, username: str) -> None:
+        await self._conn.execute(
+            "UPDATE telegram_channels SET active = 0 WHERE username = ?", (username,)
+        )
+        await self._commit()
+
+    async def list_channels_added_by(self, user_id: int) -> list[TelegramChannel]:
+        async with self._conn.execute(
+            "SELECT id, username, title, added_by_user_id, active, created_at "
+            "FROM telegram_channels WHERE added_by_user_id = ? AND active = 1 ORDER BY id",
+            (user_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [
+            TelegramChannel(
+                id=r["id"], username=r["username"], title=r["title"],
+                added_by_user_id=r["added_by_user_id"],
+                active=bool(r["active"]), created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+
+    async def set_user_channel_mode(
+        self, user_id: int, channel_id: int, mode: str
+    ) -> None:
+        await self._conn.execute(
+            "INSERT INTO user_channel_modes (user_id, channel_id, mode) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, channel_id) DO UPDATE SET mode = ?",
+            (user_id, channel_id, mode, mode),
+        )
+        await self._commit()
+
+    async def get_user_channel_mode(self, user_id: int, channel_id: int) -> str:
+        async with self._conn.execute(
+            "SELECT mode FROM user_channel_modes WHERE user_id = ? AND channel_id = ?",
+            (user_id, channel_id),
+        ) as cur:
+            row = await cur.fetchone()
+        return row["mode"] if row else "filter"
+
+    async def get_users_with_forward_all(
+        self, channel_id: int
+    ) -> list[tuple[int, int]]:
+        """Return [(user_id, telegram_id)] for users with forward_all mode on this channel."""
+        async with self._conn.execute(
+            "SELECT ucm.user_id, u.telegram_id "
+            "FROM user_channel_modes ucm "
+            "JOIN users u ON u.id = ucm.user_id "
+            "WHERE ucm.channel_id = ? AND ucm.mode = 'forward_all'",
+            (channel_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [(r["user_id"], r["telegram_id"]) for r in rows]
+
+    # --- Forward-sent dedup ---
+
+    async def is_article_forward_sent(self, user_id: int, article_id: int) -> bool:
+        async with self._conn.execute(
+            "SELECT 1 FROM forward_sent WHERE user_id = ? AND article_id = ?",
+            (user_id, article_id),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+    async def mark_article_forward_sent(self, user_id: int, article_id: int) -> None:
+        await self._conn.execute(
+            "INSERT OR IGNORE INTO forward_sent (user_id, article_id) VALUES (?, ?)",
+            (user_id, article_id),
+        )
+        await self._commit()
+
     # --- Cleanup ---
 
     async def delete_old_articles(self, days: int = 30) -> int:
@@ -498,7 +639,7 @@ class Repository:
         """
         old_clause = "SELECT id FROM articles WHERE created_at < datetime('now', ? || ' days')"
         # Delete child rows referencing old articles before deleting articles (FK constraints)
-        for child_table in ("digest_queue", "article_feedback", "sent_articles"):
+        for child_table in ("digest_queue", "article_feedback", "sent_articles", "forward_sent"):
             await self._conn.execute(
                 f"DELETE FROM {child_table} WHERE article_id IN ({old_clause})",
                 (f"-{days}",),

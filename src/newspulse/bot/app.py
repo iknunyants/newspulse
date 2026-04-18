@@ -12,11 +12,17 @@ from telegram.ext import (
 )
 
 from newspulse.bot.handlers import (
+    WAITING_FOR_CHANNEL,
     WAITING_FOR_TOPIC,
     action_callback,
+    add_channel_cancel,
+    add_channel_entry,
+    add_channel_receive,
     add_topic_cancel,
     add_topic_entry,
     add_topic_receive,
+    channel_mode_callback,
+    channel_remove_callback,
     confirm_add_callback,
     digest_command,
     digest_done_callback,
@@ -28,9 +34,11 @@ from newspulse.bot.handlers import (
     lang_done_callback,
     lang_toggle_callback,
     languages_command,
+    list_channels,
     list_topics,
     pause_topic_callback,
     pause_topic_command,
+    remove_channel,
     remove_topic,
     remove_topic_callback,
     resume_topic_callback,
@@ -57,7 +65,27 @@ def create_app(settings: Settings, repo: Repository) -> Application:
 
     _keyboard_buttons = filters.Regex(
         "^(📋 My Topics|❌ Remove Topic|🌐 Languages|📰 Sources|📊 Stats"
-        "|⏸ Pause Topic|▶️ Resume Topic|📬 Digest|❓ Help)$"
+        "|⏸ Pause Topic|▶️ Resume Topic|📡 Add Channel|📡 My Channels"
+        "|📬 Digest|❓ Help)$"
+    )
+
+    add_channel_conv = ConversationHandler(
+        entry_points=[
+            CommandHandler("add_channel", add_channel_entry),
+            MessageHandler(filters.Regex("^📡 Add Channel$"), add_channel_entry),
+        ],
+        states={
+            WAITING_FOR_CHANNEL: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND & ~_keyboard_buttons,
+                    add_channel_receive,
+                ),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", add_channel_cancel),
+            MessageHandler(filters.COMMAND, add_channel_cancel),
+        ],
     )
 
     add_topic_conv = ConversationHandler(
@@ -87,6 +115,7 @@ def create_app(settings: Settings, repo: Repository) -> Application:
         ],
     )
 
+    app.add_handler(add_channel_conv)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(add_topic_conv)
@@ -123,6 +152,11 @@ def create_app(settings: Settings, repo: Repository) -> Application:
     app.add_handler(CallbackQueryHandler(
         lambda u, c: u.callback_query.answer(), pattern=r"^src_noop$"
     ))
+    app.add_handler(CommandHandler("list_channels", list_channels))
+    app.add_handler(MessageHandler(filters.Regex("^📡 My Channels$"), list_channels))
+    app.add_handler(CommandHandler("remove_channel", remove_channel))
+    app.add_handler(CallbackQueryHandler(channel_mode_callback, pattern=r"^ch_mode:"))
+    app.add_handler(CallbackQueryHandler(channel_remove_callback, pattern=r"^ch_remove:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, free_text_handler))
     app.add_error_handler(_error_handler)
 
